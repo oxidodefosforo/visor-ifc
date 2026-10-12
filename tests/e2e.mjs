@@ -507,5 +507,10 @@ try {
   const failed = results.filter((r) => !r.ok);
   writeFileSync(join(outDir, "resultado.json"), JSON.stringify({ ifc: ifcPath, mode: ELECTRON ? "electron" : DEV ? "dev" : "build", results }, null, 2));
   console.log(`\n${results.length - failed.length}/${results.length} comprobaciones superadas. Capturas en test-results/`);
+  if (process.env.GITHUB_ACTIONS) {
+    // Los registros de Actions no siempre son legibles: los fallos se publican como anotaciones.
+    for (const r of failed) console.log(`::error title=e2e::${r.name}${r.detail ? ` — ${r.detail}` : ""}`.replace(/\n/g, " "));
+    console.log(`::notice title=e2e::${results.length - failed.length}/${results.length} comprobaciones superadas`);
+  }
   process.exit(failed.length ? 1 : 0);
 }
