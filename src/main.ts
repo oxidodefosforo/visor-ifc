@@ -1,5 +1,6 @@
 import "./style.css";
 import { Viewer, UserError, type VisibilityState } from "./viewer/Viewer";
+import type { NavMode } from "./viewer/Navigator";
 import { renderProperties } from "./ui/propertiesPanel";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -21,6 +22,10 @@ const ui = {
   progressFill: $("progress-fill"),
   badge: $("visibility-badge"),
   props: $("props"),
+  navHud: $("nav-hud"),
+  navHelp: $("nav-help"),
+  navHelpBtn: $<HTMLButtonElement>("nav-help-btn"),
+  speedVal: $("speed-val"),
   toast: $("toast"),
   viewport: $("viewport"),
 };
@@ -39,6 +44,8 @@ function refreshButtons(viewer: Viewer) {
   ui.isolate.disabled = !model || !hasSelection || busy;
   ui.show.disabled = !model || busy || viewer.visibilityState === "all";
   ui.empty.hidden = model || busy;
+  ui.navHud.hidden = !model;
+  if (!model) ui.navHelp.hidden = true;
 }
 
 function showToast(message: string, kind: "error" | "info" = "error", detail?: string) {
@@ -113,8 +120,21 @@ async function start() {
   const viewer = new Viewer(ui.viewport, {
     onSelectionChange: (info, count) => {
       hasSelection = count > 0;
-      renderProperties(ui.props, info, count);
+      renderProperties(ui.props, info, count, {
+        fit: () => void run(viewer, () => viewer.fitSelection()),
+        isolate: () => void run(viewer, () => viewer.isolateSelected()),
+        hide: () => void run(viewer, () => viewer.hideSelected()),
+        notify: (msg) => showToast(msg, "info"),
+      });
       refreshButtons(viewer);
+    },
+    onNavChange: (s) => {
+      ui.navHud.querySelectorAll<HTMLButtonElement>("[data-mode]").forEach((b) =>
+        b.classList.toggle("active", b.dataset.mode === s.mode),
+      );
+      ui.speedVal.textContent = `${s.speedMultiplier}×`;
+      $("help-left").textContent = s.mode === "fly" ? "Mirar alrededor" : "Orbitar alrededor del modelo";
+      document.body.dataset.navMode = s.mode;
     },
     onVisibilityChange: (state) => {
       setBadge(state);
@@ -166,10 +186,27 @@ async function start() {
     if (f && !viewer.isLoading) void openFile(viewer, f);
   });
 
+  // Navegación: modo, velocidad y ayuda
+  on(ui.navHud, "click", (e) => {
+    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>("button");
+    if (!btn) return;
+    if (btn.dataset.mode) void run(viewer, () => viewer.setNavMode(btn.dataset.mode as NavMode));
+    else if (btn.id === "speed-up") viewer.nav.setSpeed(1);
+    else if (btn.id === "speed-down") viewer.nav.setSpeed(-1);
+    else if (btn.id === "nav-help-btn") {
+      ui.navHelp.hidden = !ui.navHelp.hidden;
+      ui.navHelpBtn.setAttribute("aria-expanded", String(!ui.navHelp.hidden));
+    }
+    btn.blur(); // que las teclas WASD no «pulsen» el botón enfocado
+  });
+
   // Atajos de teclado
   on(window, "keydown", (e) => {
-    const k = (e as KeyboardEvent).key.toLowerCase();
-    if ((e.target as HTMLElement)?.tagName === "INPUT" || !viewer.hasModel) return;
+    const ke = e as KeyboardEvent;
+    const k = ke.key.toLowerCase();
+    const t = e.target as HTMLElement;
+    if (t?.tagName === "INPUT" || t?.tagName === "TEXTAREA" || !viewer.hasModel) return;
+    if (ke.ctrlKey || ke.metaKey || ke.altKey) return;
     if (k === "escape") void run(viewer, () => viewer.clearSelection());
     else if (k === "f") void run(viewer, () => viewer.fitAll());
     else if (k === "h" && hasSelection) void run(viewer, () => viewer.hideSelected());
@@ -178,6 +215,7 @@ async function start() {
   });
 
   setupDesktop(viewer);
+  renderProperties(ui.props, null, 0);
   refreshButtons(viewer);
   document.body.dataset.viewerReady = "true";
   // Acceso para pruebas automatizadas y depuración desde la consola.

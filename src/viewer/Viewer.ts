@@ -5,7 +5,8 @@ import type * as FRAGS from "@thatopen/fragments";
 // El worker de Fragments se sirve desde node_modules (no desde unpkg).
 // `?url` hace que Vite lo copie como recurso y devuelva su URL final.
 import fragmentsWorkerUrl from "@thatopen/fragments/worker?url";
-import { parseItemData, type ElementInfo } from "./properties";
+import { parseItemData, readProjectUnits, type ElementInfo, type ProjectUnits } from "./properties";
+import { Navigator, type NavMode, type NavState } from "./Navigator";
 
 export type LoadProgress = {
   /** 0..1 */
@@ -16,6 +17,7 @@ export type LoadProgress = {
 export type ViewerEvents = {
   onSelectionChange?: (info: ElementInfo | null, count: number) => void;
   onVisibilityChange?: (state: VisibilityState) => void;
+  onNavChange?: (state: NavState) => void;
 };
 
 export type VisibilityState = "all" | "partial" | "isolated";
@@ -42,6 +44,8 @@ export class Viewer {
   private ifcLoader!: OBC.IfcLoader;
   private highlighter!: OBF.Highlighter;
   private hider!: OBC.Hider;
+  nav!: Navigator;
+  private units: ProjectUnits = {};
   private currentModelId: string | null = null;
   private loading = false;
   private disposed = false;
@@ -116,6 +120,10 @@ export class Viewer {
     });
 
     this.hider = this.components.get(OBC.Hider);
+
+    // --- Navegación tipo Revizto (WASD/QE, mirar con el ratón, rueda hacia el cursor) ---
+    this.nav = new Navigator(this.world, this.components, (s) => this.events.onNavChange?.(s));
+    this.nav.attach();
   }
 
   private onCameraUpdate = () => {
@@ -151,6 +159,9 @@ export class Viewer {
         },
       });
       this.currentModelId = model.modelId;
+      this.units = await readProjectUnits(model).catch(() => ({}));
+      this.nav.setModelBounds(model.box);
+      this.nav.enabled = true;
       onProgress({ value: 0.97, stage: "Preparando vista" });
       await this.fragments.core.update(true);
       await this.fitAll();
@@ -170,6 +181,8 @@ export class Viewer {
     if (!id) return;
     await this.highlighter.clear(SELECT_STYLE);
     this.currentModelId = null;
+    this.nav.enabled = false;
+    this.units = {};
     await this.fragments.core.disposeModel(id);
     this.ifcLoader.cleanUp();
     this.setVisibility("all");
@@ -178,13 +191,13 @@ export class Viewer {
 
   async fitAll() {
     if (!this.currentModelId) return;
-    await this.world.camera.fitToItems();
+    await this.nav.fit(() => this.world.camera.fitToItems());
   }
 
   async fitSelection() {
     const sel = this.selection();
     if (!sel) return;
-    await this.world.camera.fitToItems(sel);
+    await this.nav.fit(() => this.world.camera.fitToItems(sel));
   }
 
   async hideSelected() {
@@ -216,6 +229,10 @@ export class Viewer {
 
   async clearSelection() {
     await this.highlighter.clear(SELECT_STYLE);
+  }
+
+  setNavMode(mode: NavMode) {
+    return this.nav.setMode(mode);
   }
 
   /** Datos de visibilidad para pruebas/diagnóstico. */
@@ -299,6 +316,8 @@ export class Viewer {
         HasProperties: { attributes: true, relations: false },
         Quantities: { attributes: true, relations: false },
         HasAssociations: { attributes: true, relations: false }, // materiales
+        ContainedInStructure: { attributes: true, relations: false }, // nivel / planta
+        Decomposes: { attributes: true, relations: false }, // conjunto al que pertenece
         // Relaciones inversas que llevarían a TODAS las instancias del tipo/pset
         ObjectTypeOf: { attributes: false, relations: false },
         DefinesOcurrence: { attributes: false, relations: false },
@@ -309,7 +328,7 @@ export class Viewer {
       relationsDefault: { attributes: false, relations: false },
     });
     const [guid] = await model.getGuidsByLocalIds([localId]);
-    return parseItemData(data ?? {}, { localId, guid: guid ?? null });
+    return parseItemData(data ?? {}, { localId, guid: guid ?? null }, this.units);
   }
 
   async dispose() {
@@ -317,6 +336,7 @@ export class Viewer {
     this.disposed = true;
     try {
       this.world?.camera?.controls.removeEventListener("update", this.onCameraUpdate);
+      this.nav?.detach();
       await this.closeModel();
     } catch (e) {
       console.warn("Error al cerrar el modelo durante dispose", e);

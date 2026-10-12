@@ -58,23 +58,27 @@ npm run dev
 Se abrirá el navegador en **http://localhost:5173** (si no se abre, copia esa dirección en Chrome o Edge).
 Deja la ventana negra abierta mientras usas el visor; para pararlo, pulsa `Ctrl + C` en ella.
 
-## Controles
+## Controles (como Revizto)
+Abajo en el centro eliges el modo: **Recorrido** (por defecto) u **Órbita**. El botón **?** muestra esta ayuda.
+
 | Acción | Cómo |
 |---|---|
-| Abrir modelo | Botón **Abrir IFC…** o arrastrar el archivo al visor |
-| Orbitar | Arrastrar con el botón izquierdo |
+| Avanzar / retroceder | **W** / **S** (o flechas ↑ ↓) |
+| Izquierda / derecha | **A** / **D** (o flechas ← →) |
+| Subir / bajar | **E** / **Q** |
+| Ir más rápido | Mantener **Shift** (×4) |
+| Velocidad | **+** / **−** o los botones del selector |
+| Mirar alrededor | Arrastrar con el botón izquierdo (en Órbita: girar alrededor del modelo) |
 | Desplazar | Arrastrar con el botón derecho |
-| Zoom | Rueda del ratón |
-| Encuadrar todo | Botón o tecla **F** |
-| Seleccionar | Clic sobre un elemento (se pinta de naranja y sus datos salen a la derecha) |
+| Acercar / alejar | Rueda, hacia el punto bajo el cursor |
+| Seleccionar | Clic sobre un elemento: se pinta de naranja y su información sale a la derecha |
+| Encuadrar todo | **F** |
+| Ocultar / aislar / restaurar | **H** / **I** / **R** |
 | Deseleccionar | **Esc** |
-| Ocultar selección | Botón **Ocultar** o tecla **H** |
-| Ver solo la selección | Botón **Aislar** o tecla **I** |
-| Volver a ver todo | Botón **Restaurar** o tecla **R** |
-| Cerrar modelo y liberar memoria | Botón **Cerrar modelo** |
 
-En el panel se ven GlobalId, clase IFC, nombre, tipo, material y los conjuntos de propiedades
-(Psets y cantidades) de la instancia y del tipo.
+**Panel de información:** clase IFC, nombre, GlobalId, tipo, nivel, material, ID de elemento y todos los
+conjuntos de propiedades y cantidades con sus unidades. Escribe en «Buscar propiedad o valor…» para filtrar,
+haz clic en un valor para copiarlo y usa **Copiar todo** para pegar la ficha en Excel.
 
 ## Problemas frecuentes
 - **«No se pudo iniciar el motor IFC»**: cierra con `Ctrl + C` y vuelve a ejecutar `npm run dev`

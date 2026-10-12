@@ -52,8 +52,9 @@ instalados y los tutoriales oficiales (docs.thatopen.com: IfcLoader, Highlighter
 index.html              Barra de herramientas, viewport, panel de propiedades, toast
 src/main.ts             Arranque: crea UNA instancia de Viewer, conecta la UI, atajos, HMR/dispose
 src/viewer/Viewer.ts    Motor: Components, World, FragmentsManager, IfcLoader, Highlighter, Hider
-src/viewer/properties.ts  ItemData de Fragments → ElementInfo (GlobalId, clase, nombre, tipo, material, Psets/Qtos)
-src/ui/propertiesPanel.ts Render del panel (HTML escapado)
+src/viewer/Navigator.ts   Navegación tipo Revizto (Recorrido/Órbita, WASD/QE, mirar, desplazar, rueda al cursor)
+src/viewer/properties.ts  ItemData → ElementInfo (GlobalId, clase, nombre, tipo, nivel, material, Psets/Qtos con unidades)
+src/ui/propertiesPanel.ts Panel de información estilo Revizto (buscador, secciones plegables, copiar, Copiar todo TSV)
 src/style.css           Estilos (tema oscuro)
 scripts/copy-wasm.mjs   Copia node_modules/web-ifc/*.wasm → public/wasm/ (predev/prebuild)
 tests/e2e.mjs           Prueba e2e Playwright + contraste con web-ifc en Node
@@ -104,6 +105,36 @@ por fases) → `FragmentsManager` (worker) → `onItemSet` añade `model.object`
   `selection()` devuelve `ModelIdMapUtils.clone(...)`. (Bug real encontrado por la e2e.)
 - **Errores** se convierten a `UserError` con mensaje en español + detalle técnico desplegable.
 - `window.__viewer` se expone para pruebas/depuración (no es API pública).
+
+## Navegación e información (v0.3, decisiones)
+
+- **Teclas como Revizto** (verificado en help.revizto.com): W/A/S/D, **E sube, Q baja**, Shift acelera
+  (×4). Se usa `e.code` (independiente del idioma del teclado). W/S siguen la dirección de la vista
+  (vuelo), A/D lateral horizontal, E/Q vertical puro. Flechas equivalentes. +/− cambian velocidad
+  (×0.125…×8). Velocidad base = 6 % de la diagonal del modelo por segundo (entre 0.8 y 40 m/s).
+- **Movimiento por tiempo de pulsación**, no por fotogramas: cada tecla guarda cuándo se pulsó y al
+  soltarla se aplica su tramo pendiente. Bug real encontrado por la e2e: con fotogramas lentos una
+  pulsación corta se perdía.
+- **Recorrido (por defecto):** el objetivo de camera-controls se mantiene a 1 cm de la cámara y los
+  botones de camera-controls se desactivan; el ratón lo gestiona Navigator: izquierdo = mirar
+  (arrastrar a la derecha = mirar a la derecha, pitch ±89°), derecho/central = desplazar con escala
+  según la profundidad del punto agarrado (raycast GPU de That Open: `Raycasters.get(world).castRay`),
+  rueda = avanzar el 25 % de la distancia al punto bajo el cursor (o 5 % del modelo si no hay nada).
+- **Rueda sin esperar transiciones:** `setLookAt(..., true)` puede no resolver su promesa si otra
+  transición la interrumpe; esperarla bloqueaba la rueda (bug real de la e2e).
+- **Órbita:** controles estándar de camera-controls (izq. rotar, der. desplazar, rueda con
+  `dollyToCursor`); pivote = punto del modelo en el centro de la pantalla.
+- `fitToItems` necesita distancia libre: `Navigator.fit()` abre `minDistance`, encuadra y, en
+  Recorrido, vuelve a acercar el objetivo a la cámara.
+- Clic izquierdo sin arrastrar sigue seleccionando (el Highlighter ignora clics con movimiento).
+- **Unidades:** de IFCPROJECT → UnitsInContext (IfcSIUnit con prefijo, IfcConversionBasedUnit,
+  IfcDerivedUnit). Se aplican por tipo de medida (IFCLENGTHMEASURE → LENGTHUNIT…) y para cantidades
+  por atributo (LengthValue…). Los valores de Psets llegan **sin convertir** (en unidades del proyecto,
+  p. ej. mm), pero el importador **sí convierte a metros** atributos geométricos como `Elevation` del
+  nivel (11399.99 mm → 11.4): por eso el nivel se muestra en m. Ángulos en rad también en grados.
+- **Nivel** por `ContainedInStructure`; «Pertenece a» por `Decomposes`.
+- El panel guarda el valor original en `data-raw` (la e2e compara contra web-ifc con tolerancia).
+  Búsqueda y plegado de secciones se conservan entre selecciones (plegado en localStorage).
 
 ## Escritorio y actualizaciones (decisiones)
 
@@ -158,7 +189,12 @@ Repositorio: https://github.com/oxidodefosforo/visor-ifc (público). Primer run 
 pasó en windows-latest; electron-builder --publish always subió el .exe pero falló antes de latest.yml
 (log no legible) → el workflow ahora compila con --publish never y publica con `gh release`.
 
-**No probado:** instalador y app en Windows real. Modelos MEP (no había IFC MEP disponible), IFC2x3, modelos >100 MB, Firefox/Safari,
+v0.3 (navegación + información): e2e 49/49 en build (×3), dev y Electron (48/48, sin portapapeles):
+dirección de W/S/A/D/E/Q, Shift, velocidad, mirar, desplazar, rueda adelante/atrás, Órbita, nivel
+contrastado con IFCRELCONTAINEDINSPATIALSTRUCTURE, unidades m³/mm, buscador y copia al portapapeles.
+
+**No probado:** instalador y app en Windows real; sensación de la navegación con GPU real (aquí ~3 fps);
+unidades derivadas de MEP (IfcDerivedUnit: caudal, presión…) — lógica escrita, sin IFC MEP para probar. Modelos MEP (no había IFC MEP disponible), IFC2x3, modelos >100 MB, Firefox/Safari,
 GPU real (solo render por software), Psets de tipo con valores (los tipos del modelo de prueba no
 tienen Psets), relaciones IfcPropertyEnumeratedValue/List/Bounded (lógica escrita, sin datos).
 

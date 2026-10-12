@@ -8,7 +8,8 @@ for (const schema of [WEBIFC.IFC2X3, WEBIFC.IFC4, WEBIFC.IFC4X3]) {
 }
 export const prettyClass = (c: string | null) => (c ? (CLASS_NAMES.get(c.toUpperCase()) ?? c) : null);
 
-export type PropertyRow = { name: string; value: string; unit?: string };
+/** value = texto mostrado (con unidad); raw = valor original del IFC (para copiar/pruebas). */
+export type PropertyRow = { name: string; value: string; raw?: unknown; unit?: string };
 export type PropertySet = { name: string; kind: "pset" | "qto"; source: "instancia" | "tipo"; properties: PropertyRow[] };
 
 export type ElementInfo = {
@@ -20,6 +21,8 @@ export type ElementInfo = {
   typeName: string | null;
   typeClass: string | null;
   materials: string[];
+  storey: { name: string; elevation: number | null } | null;
+  parent: { name: string | null; ifcClass: string | null } | null;
   propertySets: PropertySet[];
 };
 
@@ -51,11 +54,128 @@ function formatValue(v: unknown): string {
   return String(v);
 }
 
+// ---------------- Unidades ----------------
+/** Unidades del proyecto por tipo (LENGTHUNIT → "mm", AREAUNIT → "m²"…). */
+export type ProjectUnits = Partial<Record<string, string>>;
+
+const SI_PREFIX: Record<string, string> = {
+  EXA: "E", PETA: "P", TERA: "T", GIGA: "G", MEGA: "M", KILO: "k", HECTO: "h", DECA: "da",
+  DECI: "d", CENTI: "c", MILLI: "m", MICRO: "µ", NANO: "n", PICO: "p",
+};
+const SI_NAME: Record<string, string> = {
+  METRE: "m", SQUARE_METRE: "m²", CUBIC_METRE: "m³", GRAM: "g", SECOND: "s", RADIAN: "rad",
+  STERADIAN: "sr", KELVIN: "K", DEGREE_CELSIUS: "°C", AMPERE: "A", VOLT: "V", WATT: "W",
+  PASCAL: "Pa", NEWTON: "N", JOULE: "J", HERTZ: "Hz", LUMEN: "lm", LUX: "lx", CANDELA: "cd",
+  MOLE: "mol", OHM: "Ω", COULOMB: "C", FARAD: "F", HENRY: "H", WEBER: "Wb", TESLA: "T",
+  SIEMENS: "S", BECQUEREL: "Bq", GRAY: "Gy", SIEVERT: "Sv", LITRE: "L",
+};
+const CONVERSION_NAME: Record<string, string> = {
+  FOOT: "ft", INCH: "in", YARD: "yd", MILE: "mi", "SQUARE FOOT": "ft²", "SQUARE INCH": "in²",
+  "CUBIC FOOT": "ft³", "CUBIC INCH": "in³", DEGREE: "°", POUND: "lb", GALLON: "gal",
+  "US GALLON": "gal", LITRE: "L", LITER: "L", "SQUARE YARD": "yd²", ACRE: "ac",
+};
+/** Tipo de medida IFC → tipo de unidad del proyecto. */
+const MEASURE_UNIT: Record<string, string> = {
+  IFCLENGTHMEASURE: "LENGTHUNIT", IFCPOSITIVELENGTHMEASURE: "LENGTHUNIT", IFCNONNEGATIVELENGTHMEASURE: "LENGTHUNIT",
+  IFCAREAMEASURE: "AREAUNIT", IFCVOLUMEMEASURE: "VOLUMEUNIT", IFCMASSMEASURE: "MASSUNIT",
+  IFCPLANEANGLEMEASURE: "PLANEANGLEUNIT", IFCPOSITIVEPLANEANGLEMEASURE: "PLANEANGLEUNIT",
+  IFCTIMEMEASURE: "TIMEUNIT", IFCTHERMODYNAMICTEMPERATUREMEASURE: "THERMODYNAMICTEMPERATUREUNIT",
+  IFCELECTRICCURRENTMEASURE: "ELECTRICCURRENTUNIT", IFCELECTRICVOLTAGEMEASURE: "ELECTRICVOLTAGEUNIT",
+  IFCPOWERMEASURE: "POWERUNIT", IFCPRESSUREMEASURE: "PRESSUREUNIT", IFCFORCEMEASURE: "FORCEUNIT",
+  IFCENERGYMEASURE: "ENERGYUNIT", IFCFREQUENCYMEASURE: "FREQUENCYUNIT", IFCILLUMINANCEMEASURE: "ILLUMINANCEUNIT",
+  IFCLUMINOUSFLUXMEASURE: "LUMINOUSFLUXUNIT", IFCVOLUMETRICFLOWRATEMEASURE: "VOLUMETRICFLOWRATEUNIT",
+  IFCMASSFLOWRATEMEASURE: "MASSFLOWRATEUNIT", IFCLINEARVELOCITYMEASURE: "LINEARVELOCITYUNIT",
+  IFCMASSDENSITYMEASURE: "MASSDENSITYUNIT", IFCHEATFLUXDENSITYMEASURE: "HEATFLUXDENSITYUNIT",
+  IFCTHERMALTRANSMITTANCEMEASURE: "THERMALTRANSMITTANCEUNIT",
+};
+/** Cantidades IFC (IfcQuantityLength…) → tipo de unidad. */
+const QUANTITY_UNIT: Record<string, string> = {
+  LengthValue: "LENGTHUNIT", AreaValue: "AREAUNIT", VolumeValue: "VOLUMEUNIT", WeightValue: "MASSUNIT", TimeValue: "TIMEUNIT",
+};
+
+const SUPERSCRIPT: Record<string, string> = { "1": "", "2": "²", "3": "³", "4": "⁴" };
+
+function namedUnitSymbol(u: ItemData): string | null {
+  const cat = String(attr(u, "_category") ?? "").toUpperCase();
+  const name = String(attr(u, "Name") ?? "").toUpperCase();
+  if (cat === "IFCSIUNIT") {
+    const base = SI_NAME[name];
+    if (!base) return null;
+    const prefix = SI_PREFIX[String(attr(u, "Prefix") ?? "").toUpperCase()] ?? "";
+    return prefix + base;
+  }
+  if (cat === "IFCCONVERSIONBASEDUNIT") return CONVERSION_NAME[name] ?? (name ? name.toLowerCase() : null);
+  if (cat === "IFCDERIVEDUNIT") {
+    const num: string[] = [], den: string[] = [];
+    for (const el of isList(u.Elements) ? u.Elements : []) {
+      const exp = Number(attr(el, "Exponent") ?? 1);
+      const inner = isList(el.Unit) ? el.Unit[0] : undefined;
+      const sym = inner ? namedUnitSymbol(inner) : null;
+      if (!sym || !exp) return null;
+      (exp > 0 ? num : den).push(sym + (SUPERSCRIPT[String(Math.abs(exp))] ?? `^${Math.abs(exp)}`));
+    }
+    if (!num.length && !den.length) return null;
+    return (num.join("·") || "1") + (den.length ? "/" + den.join("·") : "");
+  }
+  return null;
+}
+
+/** Lee IFCPROJECT → UnitsInContext → Units. Sin efectos si el IFC no las declara. */
+export async function readProjectUnits(model: {
+  getItemsOfCategories(c: RegExp[]): Promise<Record<string, number[]>>;
+  getItemsData(ids: number[], cfg: Partial<FRAGS.ItemsDataConfig>): Promise<ItemData[]>;
+}): Promise<ProjectUnits> {
+  const ids = Object.values(await model.getItemsOfCategories([/^IFCPROJECT$/])).flat();
+  if (!ids.length) return {};
+  const [project] = await model.getItemsData([ids[0]], {
+    attributesDefault: true,
+    relations: {
+      UnitsInContext: { attributes: true, relations: true },
+      Units: { attributes: true, relations: true },
+      Elements: { attributes: true, relations: true },
+      Unit: { attributes: true, relations: true },
+    },
+    relationsDefault: { attributes: false, relations: false },
+  });
+  const out: ProjectUnits = {};
+  const assignments = isList(project?.UnitsInContext) ? project.UnitsInContext : [];
+  for (const a of assignments) {
+    for (const u of isList(a.Units) ? a.Units : []) {
+      const type = String(attr(u, "UnitType") ?? "").toUpperCase();
+      const sym = namedUnitSymbol(u);
+      if (type && sym && !out[type]) out[type] = sym;
+    }
+  }
+  return out;
+}
+
+function roundNice(n: number) {
+  if (Number.isInteger(n)) return String(n);
+  const abs = Math.abs(n);
+  const decimals = abs >= 100 ? 2 : abs >= 1 ? 3 : 4;
+  return String(Number(n.toFixed(decimals)));
+}
+
+/** Formatea un ItemAttribute con su unidad (según tipo de medida y unidades del proyecto). */
+function formatAttr(a: Attr, units: ProjectUnits, unitTypeHint?: string): { value: string; unit?: string } {
+  const v = a.value;
+  const measure = String(a.type ?? "").toUpperCase();
+  const unitType = MEASURE_UNIT[measure] ?? (measure.endsWith("MEASURE") || !measure ? unitTypeHint : undefined);
+  const unit = unitType ? units[unitType] : undefined;
+  if (typeof v === "number" && unit) {
+    let text = `${roundNice(v)} ${unit}`;
+    if (unit === "rad") text += ` (${roundNice((v * 180) / Math.PI)}°)`;
+    return { value: text, unit };
+  }
+  if (typeof v === "number") return { value: roundNice(v) };
+  return { value: formatValue(v) };
+}
+
 /** Atributos directos que se muestran en "Atributos IFC" (además de los fijos). */
 const SKIP_ATTRS = new Set(["_localId", "_category", "_guid", "GlobalId", "Name", "OwnerHistory"]);
 
 /** Extrae el valor de una IfcProperty (Single, Enumerated, List, Bounded) o IfcPhysicalQuantity. */
-function propertyRow(p: ItemData): PropertyRow | null {
+function propertyRow(p: ItemData, units: ProjectUnits): PropertyRow | null {
   const name = str(attr(p, "Name"));
   if (!name) return null;
   const valueKeys = [
@@ -65,27 +185,26 @@ function propertyRow(p: ItemData): PropertyRow | null {
   for (const k of valueKeys) {
     const raw = p[k];
     if (raw === undefined) continue;
-    if (isAttr(raw)) return { name, value: formatValue(raw.value) };
-    if (isList(raw)) return { name, value: raw.map((x) => formatValue(isAttr(x) ? x.value : x)).join(", ") };
+    if (isAttr(raw)) return { name, raw: raw.value, ...formatAttr(raw, units, QUANTITY_UNIT[k]) };
+    if (isList(raw)) {
+      const parts = raw.map((x) => (isAttr(x) ? formatAttr(x as unknown as Attr, units).value : formatValue(x)));
+      return { name, value: parts.join(", "), raw: parts };
+    }
   }
   // Valor no reconocido: se muestra cualquier atributo *Value
   for (const [k, raw] of Object.entries(p)) {
-    if (/Value$/.test(k) && isAttr(raw)) return { name, value: formatValue(raw.value) };
+    if (/Value$/.test(k) && isAttr(raw)) return { name, raw: raw.value, ...formatAttr(raw, units) };
   }
   return { name, value: "—" };
 }
 
-function readPropertyDefinition(def: ItemData, source: PropertySet["source"]): PropertySet | null {
+function readPropertyDefinition(def: ItemData, source: PropertySet["source"], units: ProjectUnits): PropertySet | null {
   const cat = String(attr(def, "_category") ?? "").toUpperCase();
   const name = str(attr(def, "Name")) ?? "(sin nombre)";
-  if (cat === "IFCPROPERTYSET") {
-    const props = (isList(def.HasProperties) ? def.HasProperties : []).map(propertyRow).filter(Boolean) as PropertyRow[];
-    return { name, kind: "pset", source, properties: props };
-  }
-  if (cat === "IFCELEMENTQUANTITY") {
-    const props = (isList(def.Quantities) ? def.Quantities : []).map(propertyRow).filter(Boolean) as PropertyRow[];
-    return { name, kind: "qto", source, properties: props };
-  }
+  const rows = (list: unknown) =>
+    (isList(list) ? list : []).map((p) => propertyRow(p, units)).filter(Boolean) as PropertyRow[];
+  if (cat === "IFCPROPERTYSET") return { name, kind: "pset", source, properties: rows(def.HasProperties) };
+  if (cat === "IFCELEMENTQUANTITY") return { name, kind: "qto", source, properties: rows(def.Quantities) };
   return null;
 }
 
@@ -93,7 +212,11 @@ function readPropertyDefinition(def: ItemData, source: PropertySet["source"]): P
  * Convierte el resultado de FragmentsModel.getItemsData() en una estructura
  * plana para la interfaz. Tolera que falten relaciones (IFC incompletos).
  */
-export function parseItemData(item: ItemData, ids: { localId: number; guid: string | null }): ElementInfo {
+export function parseItemData(
+  item: ItemData,
+  ids: { localId: number; guid: string | null },
+  units: ProjectUnits = {},
+): ElementInfo {
   const psets: PropertySet[] = [];
 
   let typeName: string | null = null;
@@ -104,7 +227,7 @@ export function parseItemData(item: ItemData, ids: { localId: number; guid: stri
     typeName ??= str(attr(type, "Name"));
     typeClass ??= str(attr(type, "_category"));
     for (const def of isList(type.HasPropertySets) ? type.HasPropertySets : []) {
-      const ps = readPropertyDefinition(def, "tipo");
+      const ps = readPropertyDefinition(def, "tipo", units);
       if (ps) psets.push(ps);
     }
     collectMaterials(type, materials);
@@ -121,7 +244,7 @@ export function parseItemData(item: ItemData, ids: { localId: number; guid: stri
         ? d.RelatingType
         : [d];
     for (const def of nested) {
-      const ps = readPropertyDefinition(def, "instancia");
+      const ps = readPropertyDefinition(def, "instancia", units);
       if (ps) psets.push(ps);
       else if (isTypeObject(def)) readType(def);
     }
@@ -135,8 +258,22 @@ export function parseItemData(item: ItemData, ids: { localId: number; guid: stri
   const attributes: PropertyRow[] = [];
   for (const [k, v] of Object.entries(item)) {
     if (SKIP_ATTRS.has(k) || !isAttr(v)) continue;
-    attributes.push({ name: k, value: formatValue(v.value) });
+    attributes.push({ name: k, raw: v.value, ...formatAttr(v, units) });
   }
+
+  // Nivel (IfcBuildingStorey). La elevación llega ya convertida a metros por el importador
+  // (verificado: 11399.99 mm en el IFC → 11.4).
+  const container = isList(item.ContainedInStructure) ? item.ContainedInStructure[0] : undefined;
+  const storey = container
+    ? {
+        name: str(attr(container, "Name")) ?? str(attr(container, "LongName")) ?? "(sin nombre)",
+        elevation: typeof attr(container, "Elevation") === "number" ? (attr(container, "Elevation") as number) : null,
+      }
+    : null;
+  const parentItem = isList(item.Decomposes) ? item.Decomposes[0] : undefined;
+  const parent = parentItem
+    ? { name: str(attr(parentItem, "Name")), ifcClass: prettyClass(str(attr(parentItem, "_category"))) }
+    : null;
 
   return {
     localId: ids.localId,
@@ -147,6 +284,8 @@ export function parseItemData(item: ItemData, ids: { localId: number; guid: stri
     typeName,
     typeClass: prettyClass(typeClass),
     materials: [...materials],
+    storey,
+    parent,
     propertySets: psets,
   };
 }

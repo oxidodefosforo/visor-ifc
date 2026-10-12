@@ -70,9 +70,15 @@ async function groundTruth(guid) {
     }
     psets[val(def.Name)] = props;
   }
+  let storey = null;
+  const cont = api.GetLineIDsWithType(model, WebIFC.IFCRELCONTAINEDINSPATIALSTRUCTURE);
+  for (let i = 0; i < cont.size() && !storey; i++) {
+    const rel = api.GetLine(model, cont.get(i));
+    if (rel.RelatedElements.some((o) => val(o) === id)) storey = val(api.GetLine(model, val(rel.RelatingStructure)).Name);
+  }
   const cls = api.GetNameFromTypeCode(api.GetLineType(model, id));
   api.CloseModel(model);
-  return { expressId: id, ifcClass: cls, name: val(line.Name), psets };
+  return { expressId: id, ifcClass: cls, name: val(line.Name), psets, storey };
 }
 
 // ---------- Lectura de píxeles del lienzo WebGL ----------
@@ -106,24 +112,30 @@ const pixelStats = (page) =>
 
 const propsPanel = (page) =>
   page.evaluate(() => {
-    const out = { identity: {}, psets: {} };
+    const out = { identity: {}, psets: {}, text: {} };
     document.querySelectorAll('[data-testid="identity"] tr').forEach((tr) => {
       out.identity[tr.querySelector("th").textContent] = tr.querySelector("td").textContent;
     });
-    document.querySelectorAll('[data-testid="psets"] details').forEach((d) => {
+    document.querySelectorAll("#props details.sec:not([data-testid])").forEach((d) => {
       const name = d.querySelector("summary").childNodes[0].textContent.trim();
-      const props = {};
-      d.querySelectorAll("tr").forEach((tr) => (props[tr.querySelector("th").textContent] = tr.querySelector("td").textContent));
+      const props = {}, text = {};
+      d.querySelectorAll("tr").forEach((tr) => {
+        const k = tr.querySelector("th").textContent, td = tr.querySelector("td");
+        props[k] = td.dataset.raw;
+        text[k] = td.textContent;
+      });
       out.psets[name] = props;
+      out.text[name] = text;
     });
     return out;
   });
 
-const fmt = (v) => {
-  if (typeof v === "number") return Number.isInteger(v) ? String(v) : String(Math.round(v * 1e6) / 1e6);
-  if (v === true || v === ".T.") return "Sí";
-  if (v === false || v === ".F.") return "No";
-  return v == null ? "—" : String(v);
+const fmt = (v) => (v == null ? "—" : String(v));
+/** El panel guarda el valor original en data-raw: debe coincidir con el IFC (números con tolerancia). */
+const same = (panelRaw, ifcValue) => {
+  if (panelRaw === undefined) return false;
+  if (typeof ifcValue === "number") return Math.abs(Number(panelRaw) - ifcValue) <= Math.abs(ifcValue) * 1e-9 + 1e-12;
+  return panelRaw === fmt(ifcValue);
 };
 
 // ---------- Servidor / aplicación ----------
@@ -152,7 +164,8 @@ if (ELECTRON) {
   }
   console.log(`Servidor ${DEV ? "dev" : "preview (build)"}: ${url}`);
   browser = await chromium.launch({ headless: !HEADED, args: GL_ARGS });
-  page = await browser.newPage({ viewport: { width: 1400, height: 850 } });
+  const ctx = await browser.newContext({ viewport: { width: 1400, height: 850 }, permissions: ["clipboard-read", "clipboard-write"] });
+  page = await ctx.newPage();
 }
 console.log(`IFC de prueba: ${ifcPath}\n`);
 
@@ -220,21 +233,101 @@ try {
   check("Geometrías en GPU", mem.renderer.geometries > 0, JSON.stringify(mem.renderer));
   await page.screenshot({ path: join(outDir, "01-cargado.png") });
 
-  // Navegación: orbitar con el ratón y zoom con la rueda (cambio de cámara)
-  const camPos = () => page.evaluate(() => window.__viewer.world.camera.three.position.toArray().map((n) => +n.toFixed(3)));
-  const before = await camPos();
+  // Navegación tipo Revizto (modo Recorrido por defecto)
+  const pose = () => page.evaluate(() => window.__viewer.nav.debugPose());
+  const sub = (a, b) => a.map((v, i) => v - b[i]);
+  const len = (v) => Math.hypot(...v);
+  const dot = (a, b) => a.reduce((s, x, i) => s + x * b[i], 0);
   const box = await page.locator("#viewport canvas").boundingBox();
-  await page.mouse.move(box.x + box.width * 0.3, box.y + box.height * 0.5);
+  check("HUD de navegación visible en modo Recorrido", (await page.isVisible("#nav-hud")) && (await page.getAttribute('[data-mode="fly"]', "class")).includes("active"));
+  await page.mouse.move(box.x + box.width * 0.5, box.y + box.height * 0.5);
+  const keyMove = async (code, ms = 700, shift = false) => {
+    const a = await pose();
+    if (shift) await page.keyboard.down("Shift");
+    await page.keyboard.down(code);
+    await page.waitForTimeout(ms);
+    await page.keyboard.up(code);
+    if (shift) await page.keyboard.up("Shift");
+    await page.waitForTimeout(300);
+    const z = await pose();
+    const d = sub(z.pos, a.pos);
+    const right = [-a.dir[2], 0, a.dir[0]]; // dir × (0,1,0)
+    const rn = len(right) || 1;
+    return { d, dist: len(d), fwd: dot(d, a.dir) / (len(d) || 1), right: dot(d, right) / rn / (len(d) || 1), up: d[1] / (len(d) || 1), dirSame: len(sub(z.dir, a.dir)) < 1e-6 };
+  };
+  const mW = await keyMove("KeyW"), mS = await keyMove("KeyS"), mA = await keyMove("KeyA"), mD = await keyMove("KeyD");
+  const mE = await keyMove("KeyE"), mQ = await keyMove("KeyQ");
+  check("W/S avanzan y retroceden según la vista", mW.fwd > 0.99 && mS.fwd < -0.99 && mW.dist > 0.5, `W ${mW.dist.toFixed(2)} m, S ${mS.dist.toFixed(2)} m`);
+  check("A/D se desplazan a izquierda/derecha", mA.right < -0.99 && mD.right > 0.99 && Math.abs(mA.up) < 1e-6, `A ${mA.dist.toFixed(2)} m, D ${mD.dist.toFixed(2)} m`);
+  check("E sube y Q baja (vertical)", mE.up > 0.999 && mQ.up < -0.999, `E +${mE.d[1].toFixed(2)} m, Q ${mQ.d[1].toFixed(2)} m`);
+  check("Las teclas no giran la vista", [mW, mS, mA, mD, mE, mQ].every((m) => m.dirSame));
+  const mShift = await keyMove("KeyW", 700, true);
+  const mW2 = await keyMove("KeyW", 700);
+  check("Shift acelera el movimiento", mShift.dist > mW2.dist * 2, `${mShift.dist.toFixed(2)} m con Shift vs ${mW2.dist.toFixed(2)} m sin Shift`);
+  const v0 = await page.textContent("#speed-val");
+  await page.click("#speed-up");
+  const v1 = await page.textContent("#speed-val");
+  await page.click("#speed-down");
+  check("Control de velocidad", v0 === "1×" && v1 === "2×" && (await page.textContent("#speed-val")) === "1×", `${v0} → ${v1}`);
+
+  let a = await pose();
+  await page.mouse.move(box.x + box.width * 0.5, box.y + box.height * 0.5);
   await page.mouse.down();
-  await page.mouse.move(box.x + box.width * 0.45, box.y + box.height * 0.45, { steps: 10 });
+  await page.mouse.move(box.x + box.width * 0.5 + 120, box.y + box.height * 0.5 - 30, { steps: 10 });
   await page.mouse.up();
-  await page.waitForTimeout(600);
-  const afterOrbit = await camPos();
-  check("Órbita con el ratón mueve la cámara", JSON.stringify(before) !== JSON.stringify(afterOrbit));
-  await page.mouse.wheel(0, -400);
-  await page.waitForTimeout(600);
-  const afterZoom = await camPos();
-  check("Zoom con la rueda mueve la cámara", JSON.stringify(afterOrbit) !== JSON.stringify(afterZoom));
+  await page.waitForTimeout(300);
+  let z = await pose();
+  const rightA = [-a.dir[2], 0, a.dir[0]];
+  check(
+    "Arrastrar con botón izquierdo = mirar (gira sin moverse)",
+    len(sub(z.pos, a.pos)) < 0.05 && dot(z.dir, rightA) > 0.1 && z.dir[1] > a.dir[1],
+    `giro ${((Math.acos(Math.min(1, dot(z.dir, a.dir))) * 180) / Math.PI).toFixed(1)}°, hacia la derecha y arriba`,
+  );
+  a = await pose();
+  await page.mouse.move(box.x + box.width * 0.5, box.y + box.height * 0.5);
+  await page.mouse.down({ button: "right" });
+  await page.mouse.move(box.x + box.width * 0.5 - 100, box.y + box.height * 0.5, { steps: 10 });
+  await page.mouse.up({ button: "right" });
+  await page.waitForTimeout(300);
+  z = await pose();
+  check("Arrastrar con botón derecho = desplazar (sin girar)", len(sub(z.pos, a.pos)) > 0.1 && len(sub(z.dir, a.dir)) < 1e-6, `${len(sub(z.pos, a.pos)).toFixed(2)} m`);
+
+  await page.click("#btn-fit");
+  await page.waitForTimeout(1200);
+  a = await pose();
+  await page.mouse.move(box.x + box.width * 0.5, box.y + box.height * 0.5);
+  for (let i = 0; i < 3; i++) {
+    await page.mouse.wheel(0, -100);
+    await page.waitForTimeout(150);
+  }
+  await page.waitForTimeout(1500);
+  z = await pose();
+  const wd = sub(z.pos, a.pos);
+  check("Rueda: acerca hacia el cursor", len(wd) > 0.5 && dot(wd, a.dir) / len(wd) > 0.95, `${len(wd).toFixed(2)} m hacia el centro de la vista`);
+  for (let i = 0; i < 3; i++) {
+    await page.mouse.wheel(0, 100);
+    await page.waitForTimeout(150);
+  }
+  await page.waitForTimeout(1500);
+  const z2 = await pose();
+  check("Rueda: aleja al girarla al revés", dot(sub(z2.pos, z.pos), a.dir) < -0.5);
+
+  await page.click('[data-mode="orbit"]');
+  await page.waitForTimeout(800);
+  const orbitDist = () => page.evaluate(() => window.__viewer.world.camera.controls.distance);
+  const d0 = await orbitDist();
+  a = await pose();
+  await page.mouse.move(box.x + box.width * 0.4, box.y + box.height * 0.5);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width * 0.55, box.y + box.height * 0.5, { steps: 10 });
+  await page.mouse.up();
+  await page.waitForTimeout(1200);
+  z = await pose();
+  const d1 = await orbitDist();
+  check("Modo Órbita: gira alrededor de un punto del modelo", d0 > 1 && Math.abs(d1 - d0) < d0 * 0.02 && len(sub(z.pos, a.pos)) > 1, `radio ${d0.toFixed(1)} m, desplazamiento ${len(sub(z.pos, a.pos)).toFixed(1)} m`);
+  await page.click('[data-mode="fly"]');
+  await page.waitForTimeout(500);
+  check("Volver a Recorrido", (await page.evaluate(() => document.body.dataset.navMode)) === "fly" && (await orbitDist()) < 0.05);
   await page.click("#btn-fit");
   await page.waitForTimeout(800);
   const afterFit = await pixelStats(page);
@@ -271,7 +364,7 @@ try {
   let mismatches = [];
   for (const [ps, props] of Object.entries(truth.psets))
     for (const [k, v] of Object.entries(props))
-      if (panel.psets[ps]?.[k] !== fmt(v)) mismatches.push(`${ps}.${k}: IFC=${fmt(v)} panel=${panel.psets[ps]?.[k]}`);
+      if (!same(panel.psets[ps]?.[k], v)) mismatches.push(`${ps}.${k}: IFC=${fmt(v)} panel=${panel.psets[ps]?.[k]}`);
   check("Valores de propiedades idénticos al IFC", mismatches.length === 0, mismatches.slice(0, 5).join("; ") || `${Object.values(truth.psets).reduce((n, p) => n + Object.keys(p).length, 0)} valores`);
 
   // 5b. Un elemento de cada clase con geometría, contrastado con web-ifc
@@ -289,19 +382,43 @@ try {
   const perClass = [];
   for (const g of guids) {
     await page.evaluate((g) => window.__viewer.selectByGuid(g), g);
-    await page.waitForFunction((g) => document.querySelector('[data-testid="identity"] td')?.textContent === g, g, { timeout: 10_000 });
+    await page.waitForFunction((g) => [...document.querySelectorAll('[data-testid="identity"] tr')].some((tr) => tr.querySelector("th").textContent === "GlobalId" && tr.querySelector("td").textContent === g), g, { timeout: 10_000 });
     const pnl = await propsPanel(page);
     const t = await groundTruth(g);
     const bad = [];
     if (pnl.identity["Clase IFC"] !== t.ifcClass) bad.push("clase");
     if (pnl.identity["Nombre"] !== (t.name ?? "—")) bad.push("nombre");
     for (const [ps, props] of Object.entries(t.psets))
-      for (const [k, v] of Object.entries(props)) if (pnl.psets[ps]?.[k] !== fmt(v)) bad.push(`${ps}.${k}`);
+      for (const [k, v] of Object.entries(props)) if (!same(pnl.psets[ps]?.[k], v)) bad.push(`${ps}.${k}`);
+    if (t.storey && !(pnl.identity["Nivel"] ?? "").startsWith(t.storey)) bad.push("nivel");
     perClass.push(`${t.ifcClass}${bad.length ? ` ✗(${bad.join(",")})` : " ✓"}`);
   }
   check("Datos correctos en un elemento de cada clase", perClass.every((s) => s.endsWith("✓")), perClass.join(" · "));
+
+  // Panel de información: nivel, unidades, búsqueda y copia
+  const beamGuid = guids.find(Boolean);
+  await page.evaluate((g) => window.__viewer.selectByGuid(g), beamGuid);
+  await page.waitForFunction((g) => [...document.querySelectorAll('[data-testid="identity"] tr')].some((tr) => tr.querySelector("th").textContent === "GlobalId" && tr.querySelector("td").textContent === g), beamGuid);
+  const pb = await propsPanel(page);
+  const tb = await groundTruth(beamGuid);
+  check("Nivel (planta) del elemento", !!tb.storey && (pb.identity["Nivel"] ?? "").startsWith(tb.storey), pb.identity["Nivel"]);
+  const unitTexts = Object.values(pb.text).flatMap((o) => Object.values(o));
+  check("Valores con unidades del proyecto", unitTexts.some((t) => / m³$/.test(t)) && unitTexts.some((t) => / mm$/.test(t)), unitTexts.filter((t) => / (m³|m²|mm)$/.test(t)).slice(0, 4).join(", "));
+  const firstProp = Object.keys(Object.values(pb.psets)[0] ?? {})[0];
+  await page.fill(".prop-search", firstProp);
+  await page.waitForTimeout(200);
+  const visibleRows = await page.$$eval("#props tr:not([hidden])", (rows) => rows.filter((r) => r.closest("details:not([hidden])")).map((r) => r.textContent.toLowerCase()));
+  check("Buscador filtra propiedades", visibleRows.length > 0 && visibleRows.every((t) => t.includes(firstProp.toLowerCase())) && (await page.textContent(".search-count")).includes("resultado"), `«${firstProp}»: ${visibleRows.length} fila(s)`);
+  await page.fill(".prop-search", "");
+  if (!ELECTRON) {
+    await page.click('[data-testid="identity"] tr:nth-child(3) td');
+    await page.waitForTimeout(300);
+    const clip = await page.evaluate(() => navigator.clipboard.readText().catch((e) => "ERR " + e.message));
+    check("Clic en un valor lo copia al portapapeles", clip === beamGuid && (await page.textContent("#toast")).includes("Copiado"), clip);
+  }
+  await page.screenshot({ path: join(outDir, "05-panel.png") });
   await page.evaluate((g) => window.__viewer.selectByGuid(g), guid);
-  await page.waitForFunction((g) => document.querySelector('[data-testid="identity"] td')?.textContent === g, guid);
+  await page.waitForFunction((g) => [...document.querySelectorAll('[data-testid="identity"] tr')].some((tr) => tr.querySelector("th").textContent === "GlobalId" && tr.querySelector("td").textContent === g), guid);
 
   // 6. Ocultar / aislar / restaurar
   const counts0 = await page.evaluate(() => window.__viewer.visibilityCounts());
@@ -333,7 +450,7 @@ try {
   check("Restaurar con la tecla R", counts4.hidden === 0, JSON.stringify(counts4));
   await page.keyboard.press("Escape");
   await page.waitForTimeout(300);
-  check("Esc deselecciona", (await page.textContent("#props")).includes("Selecciona un elemento"));
+  check("Esc deselecciona", (await page.textContent("#props")).includes("Haz clic en un elemento"));
 
   // 7. Cerrar modelo y liberar memoria
   const memBefore = await page.evaluate(() => window.__viewer.debugInfo());

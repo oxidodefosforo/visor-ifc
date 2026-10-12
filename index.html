@@ -41,10 +41,37 @@
           <div class="progress-bar"><div id="progress-fill"></div></div>
         </div>
         <div id="visibility-badge" class="badge" hidden></div>
-        <div class="hint">Clic: seleccionar · Esc: deseleccionar · Arrastrar: orbitar · Rueda: zoom · Clic derecho: desplazar</div>
+        <div class="nav-hud" id="nav-hud" hidden>
+          <div class="seg" role="group" aria-label="Modo de navegación">
+            <button data-mode="fly" class="active" title="Recorrido: WASD + ratón para mirar (como Revizto)">Recorrido</button>
+            <button data-mode="orbit" title="Órbita: girar alrededor del modelo">Órbita</button>
+          </div>
+          <div class="speed" title="Velocidad de movimiento (teclas + y −)">
+            <button id="speed-down" aria-label="Más lento">−</button>
+            <span id="speed-val">1×</span>
+            <button id="speed-up" aria-label="Más rápido">+</button>
+          </div>
+          <button id="nav-help-btn" class="help-btn" aria-expanded="false" title="Controles">?</button>
+        </div>
+        <div class="nav-help" id="nav-help" hidden>
+          <h4>Controles</h4>
+          <table>
+            <tr><th><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></th><td>Avanzar, izquierda, retroceder, derecha</td></tr>
+            <tr><th><kbd>E</kbd> / <kbd>Q</kbd></th><td>Subir / bajar</td></tr>
+            <tr><th><kbd>Shift</kbd></th><td>Mantener para ir 4× más rápido</td></tr>
+            <tr><th><kbd>+</kbd> / <kbd>−</kbd></th><td>Velocidad</td></tr>
+            <tr><th>Arrastrar izq.</th><td id="help-left">Mirar alrededor</td></tr>
+            <tr><th>Arrastrar der.</th><td>Desplazar</td></tr>
+            <tr><th>Rueda</th><td>Acercar / alejar hacia el cursor</td></tr>
+            <tr><th>Clic</th><td>Seleccionar y ver información</td></tr>
+            <tr><th><kbd>F</kbd></th><td>Encuadrar todo</td></tr>
+            <tr><th><kbd>H</kbd> <kbd>I</kbd> <kbd>R</kbd></th><td>Ocultar, aislar, restaurar</td></tr>
+            <tr><th><kbd>Esc</kbd></th><td>Deseleccionar</td></tr>
+          </table>
+        </div>
       </section>
       <aside class="panel" id="panel">
-        <h2>Propiedades</h2>
+        <h2>Información</h2>
         <div id="props" class="props muted">Selecciona un elemento del modelo.</div>
       </aside>
     </main>
