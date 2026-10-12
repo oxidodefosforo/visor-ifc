@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Visor IFC</title>
+  </head>
+  <body>
+    <header class="toolbar">
+      <div class="brand">Visor IFC</div>
+      <div class="group">
+        <button id="btn-open" class="primary" title="Abrir un archivo .ifc de tu ordenador">Abrir IFC…</button>
+        <input id="file-input" type="file" accept=".ifc" hidden />
+        <button id="btn-close" disabled title="Cerrar el modelo y liberar memoria">Cerrar modelo</button>
+      </div>
+      <div class="sep"></div>
+      <div class="group">
+        <button id="btn-fit" disabled title="Encuadrar todo el modelo (F)">Encuadrar todo</button>
+        <button id="btn-fit-sel" disabled title="Encuadrar la selección">Encuadrar selección</button>
+      </div>
+      <div class="sep"></div>
+      <div class="group">
+        <button id="btn-hide" disabled title="Ocultar el elemento seleccionado (H)">Ocultar</button>
+        <button id="btn-isolate" disabled title="Mostrar solo el elemento seleccionado (I)">Aislar</button>
+        <button id="btn-show" disabled title="Mostrar todos los elementos (R)">Restaurar</button>
+      </div>
+      <div class="model-name" id="model-name"></div>
+      <div class="update-status" id="update-status" hidden></div>
+      <div class="app-version" id="app-version" hidden></div>
+    </header>
+
+    <main class="layout">
+      <section class="viewport-wrap">
+        <div id="viewport" class="viewport"></div>
+        <div id="empty" class="empty">
+          <p><strong>Abre un archivo IFC</strong> con el botón «Abrir IFC…» o arrástralo aquí.</p>
+          <p class="muted">El archivo se procesa en tu navegador; no se sube a ningún servidor.</p>
+        </div>
+        <div id="progress" class="progress" hidden>
+          <div class="progress-label"><span id="progress-stage">Cargando…</span><span id="progress-pct">0 %</span></div>
+          <div class="progress-bar"><div id="progress-fill"></div></div>
+        </div>
+        <div id="visibility-badge" class="badge" hidden></div>
+        <div class="hint">Clic: seleccionar · Esc: deseleccionar · Arrastrar: orbitar · Rueda: zoom · Clic derecho: desplazar</div>
+      </section>
+      <aside class="panel" id="panel">
+        <h2>Propiedades</h2>
+        <div id="props" class="props muted">Selecciona un elemento del modelo.</div>
+      </aside>
+    </main>
+
+    <div id="toast" class="toast" role="alert" hidden></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

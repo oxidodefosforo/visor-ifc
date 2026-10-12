@@ -1,0 +1,82 @@
+:root {
+  --bg: #14171b;
+  --surface: #1d2127;
+  --surface-2: #262b33;
+  --border: #323843;
+  --text: #e6e9ee;
+  --muted: #8d96a3;
+  --accent: #ffb020;
+  --accent-ink: #1a1300;
+  --error: #ff6b6b;
+  --ok: #4cc38a;
+  font-family: "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+  font-size: 14px;
+  color: var(--text);
+  background: var(--bg);
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; height: 100%; overflow: hidden; }
+body { display: flex; flex-direction: column; }
+
+.toolbar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 8px 12px; background: var(--surface); border-bottom: 1px solid var(--border);
+}
+.brand { font-weight: 700; letter-spacing: .02em; margin-right: 6px; }
+.brand::before { content: ""; display: inline-block; width: 10px; height: 10px; background: var(--accent); margin-right: 8px; transform: rotate(45deg); }
+.group { display: flex; gap: 6px; }
+.sep { width: 1px; height: 22px; background: var(--border); }
+.model-name { margin-left: auto; color: var(--muted); max-width: 30ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+button {
+  font: inherit; color: var(--text); background: var(--surface-2); border: 1px solid var(--border);
+  padding: 6px 12px; border-radius: 6px; cursor: pointer;
+}
+button:hover:not(:disabled) { border-color: var(--accent); }
+button:disabled { opacity: .4; cursor: not-allowed; }
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.layout { flex: 1; display: grid; grid-template-columns: 1fr 380px; min-height: 0; }
+.viewport-wrap { position: relative; min-width: 0; }
+.viewport { position: absolute; inset: 0; }
+.viewport-wrap.drag::after { content: "Suelta el IFC aquí"; position: absolute; inset: 12px; border: 2px dashed var(--accent); border-radius: 10px; display: grid; place-items: center; font-size: 18px; background: rgba(0,0,0,.35); pointer-events: none; }
+
+.empty { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; pointer-events: none; padding: 16px; }
+.empty p { margin: 4px 0; }
+.muted { color: var(--muted); }
+.small { font-size: 12px; }
+
+.progress { position: absolute; left: 50%; top: 40%; transform: translate(-50%, -50%); width: min(420px, 80%); background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; box-shadow: 0 10px 30px rgba(0,0,0,.4); }
+.progress-label { display: flex; justify-content: space-between; margin-bottom: 8px; }
+.progress-bar { height: 6px; background: var(--surface-2); border-radius: 3px; overflow: hidden; }
+#progress-fill { height: 100%; width: 0; background: var(--accent); transition: width .15s; }
+
+.badge { position: absolute; top: 12px; left: 12px; background: var(--accent); color: var(--accent-ink); padding: 4px 10px; border-radius: 999px; font-weight: 600; font-size: 12px; }
+.hint { position: absolute; bottom: 8px; right: 12px; text-align: right; color: var(--muted); font-size: 12px; pointer-events: none; text-shadow: 0 1px 2px #000; }
+
+.panel { background: var(--surface); border-left: 1px solid var(--border); overflow-y: auto; padding: 12px 14px; }
+.panel h2 { font-size: 15px; margin: 0 0 10px; }
+.panel h3 { font-size: 13px; margin: 16px 0 6px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+.props table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.props th, .props td { text-align: left; vertical-align: top; padding: 4px 6px; border-bottom: 1px solid var(--border); word-break: break-word; }
+.props th { color: var(--muted); font-weight: 500; width: 45%; }
+.props details { margin: 6px 0; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px; }
+.props summary { cursor: pointer; padding: 4px 2px; font-weight: 600; }
+.tag { font-weight: 400; font-size: 11px; color: var(--muted); margin-left: 4px; }
+
+.toast { position: fixed; right: 16px; bottom: 16px; max-width: 460px; padding: 12px 14px; border-radius: 8px; background: var(--surface-2); border: 1px solid var(--border); box-shadow: 0 10px 30px rgba(0,0,0,.4); z-index: 10; }
+.toast.error { border-color: var(--error); }
+.toast.error > div:first-child::before { content: "⚠ "; color: var(--error); }
+.toast.info { border-color: var(--ok); }
+.toast pre { white-space: pre-wrap; font-size: 11px; color: var(--muted); max-height: 160px; overflow: auto; }
+
+@media (max-width: 800px) {
+  .layout { grid-template-columns: 1fr; grid-template-rows: 1fr 40%; }
+  .panel { border-left: 0; border-top: 1px solid var(--border); }
+}
+
+/* Aplicación de escritorio */
+.update-status { font-size: 12px; color: var(--accent); white-space: nowrap; }
+.app-version { font-size: 12px; color: var(--muted); padding: 2px 6px; border: 1px solid var(--border); border-radius: 4px; }
