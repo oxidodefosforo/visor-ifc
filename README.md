@@ -98,8 +98,9 @@ Las capturas quedan en `test-results/`.
 ## Publicar una versión nueva (para que se actualicen los programas instalados)
 Requiere un repositorio **público** en GitHub con este proyecto (ver `CLAUDE.md`):
 ```
-npm version patch
-git push --follow-tags
+npm version patch --no-git-tag-version
+git commit -am "Versión X.Y.Z"
+git push
 ```
 GitHub compila el instalador, ejecuta la prueba y lo publica; los programas instalados se actualizan solos.
 

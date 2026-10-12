@@ -128,9 +128,14 @@ por fases) → `FragmentsManager` (worker) → `onItemSet` añade `model.object`
 ## Publicar una versión nueva
 
 1. Cambios en el código + `npm run test:e2e`.
-2. `npm version patch` (o `minor`) → sube `package.json` y crea la etiqueta `vX.Y.Z`.
-3. `git push --follow-tags` → GitHub Actions (`release.yml`) compila en Windows, pasa la e2e y publica la
-   Release con `Visor-IFC-Setup-X.Y.Z.exe`, `latest.yml` y `.blockmap`.
+2. `npm version patch --no-git-tag-version` (o `minor`) → sube la versión en `package.json`; commit.
+3. `git push` a main → GitHub Actions (`release.yml`, se activa al cambiar package.json) compila en Windows,
+   pasa la e2e y publica la Release `vX.Y.Z` con `Visor-IFC-Setup-X.Y.Z.exe`, `.blockmap` y `latest.yml`.
+   También se activa con una etiqueta `vX.Y.Z` o a mano (`gh workflow run release.yml`). Si la Release ya
+   tiene latest.yml, no hace nada. Desde la sesión de Claude no se pueden subir etiquetas (403 del proxy):
+   por eso el disparador principal es el cambio de package.json en main.
+   Los registros de Actions no se pueden leer desde la sesión (blob storage bloqueado): el workflow
+   vuelca errores y resultados como anotaciones (`gh api .../check-runs/<job>/annotations`).
 4. Los programas instalados la detectan al abrirse. La Release nunca debe borrarse ni editarse a mano
    (latest.yml contiene el SHA-512 del instalador).
 
@@ -149,8 +154,11 @@ Wine con `--updated /S --force-run`: sustituye app.asar, registro 0.2.1, conserv
 Notas Wine: su `tasklist` ignora filtros, así que la comprobación «app abierta» del instalador da falso
 positivo (en la prueba se usó una variante sin esa comprobación); la ventana Electron no pinta en Wine.
 
-**No probado:** instalador y app en Windows real; flujo con GitHub Releases real; el workflow de
-GitHub Actions (no hay repositorio aún). Modelos MEP (no había IFC MEP disponible), IFC2x3, modelos >100 MB, Firefox/Safari,
+Repositorio: https://github.com/oxidodefosforo/visor-ifc (público). Primer run de Actions (0.2.1): e2e
+pasó en windows-latest; electron-builder --publish always subió el .exe pero falló antes de latest.yml
+(log no legible) → el workflow ahora compila con --publish never y publica con `gh release`.
+
+**No probado:** instalador y app en Windows real. Modelos MEP (no había IFC MEP disponible), IFC2x3, modelos >100 MB, Firefox/Safari,
 GPU real (solo render por software), Psets de tipo con valores (los tipos del modelo de prueba no
 tienen Psets), relaciones IfcPropertyEnumeratedValue/List/Bounded (lógica escrita, sin datos).
 
