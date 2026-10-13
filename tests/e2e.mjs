@@ -46,6 +46,16 @@ const ifcPath = process.env.IFC_FILE
     })();
 
 const results = [];
+// Vigilante: si la prueba se queda colgada (p. ej. una promesa del navegador que nunca termina),
+// se informa de la última comprobación superada y se sale con error en lugar de esperar horas en CI.
+const WATCHDOG_MIN = Number(process.env.E2E_WATCHDOG_MIN ?? 45);
+setTimeout(() => {
+  const last = results[results.length - 1]?.name ?? "(ninguna)";
+  const msg = `Prueba colgada: ${WATCHDOG_MIN} min sin terminar. Última comprobación: «${last}» (${results.length} hechas)`;
+  console.log(`✗ ${msg}`);
+  if (process.env.GITHUB_ACTIONS) console.log(`::error title=e2e::${msg}`);
+  process.exit(1);
+}, WATCHDOG_MIN * 60_000).unref();
 const check = (name, ok, detail = "") => {
   results.push({ name, ok: !!ok, detail });
   console.log(`${ok ? "✓" : "✗"} ${name}${detail ? ` — ${detail}` : ""}`);
