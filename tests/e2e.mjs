@@ -831,7 +831,10 @@ try {
       const ctx2 = await (globalThis.__vrBrowser = await chromium.launch({ headless: !HEADED, args: GL_ARGS })).newContext({ viewport: { width: 900, height: 560 } });
       const p2 = await ctx2.newPage();
       p2.on("request", (r) => { const u = new URL(r.url()); if (!/^(blob|data):/.test(u.protocol) && !["localhost", "127.0.0.1"].includes(u.hostname)) external.push(r.url()); });
-      p2.on("pageerror", (e) => consoleErrors.push(e.message));
+      const p2errors = [];
+      p2.on("pageerror", (e) => (consoleErrors.push(e.message), p2errors.push(e.message)));
+      p2.on("console", (m) => m.type() === "error" && p2errors.push(m.text()));
+      p2.on("requestfailed", (r) => p2errors.push(`petición fallida ${r.url()} ${r.failure()?.errorText}`));
       await p2.addInitScript({ content: IWER_INIT });
       const tOpen = Date.now();
       // Diagnóstico si la navegación falla: ¿responde el servidor local?
@@ -845,7 +848,7 @@ try {
         await p2.waitForSelector("[data-enter-vr]", { timeout: 240_000 });
       } catch (e) {
         const st = await p2.evaluate(() => `estado=${document.body.dataset.modelState} paso=${document.body.dataset.vrStep} vr=${document.body.dataset.vr} aviso=${document.querySelector("#toast")?.textContent?.slice(0, 200)}`).catch(() => "?");
-        throw new Error(`La vista VR no terminó de cargar en el navegador (${st})`);
+        throw new Error(`La vista VR no terminó de cargar en el navegador (${st}; errores: ${p2errors.slice(0, 4).join(" | ").slice(0, 600)})`);
       }
       const got = await p2.evaluate((k) => ({ type: window.__viewer.appearance.profile.byType[k]?.preset, realistic: window.__viewer.appearance.realistic, n: window.__viewer.appearance.groups.reduce((n, g) => n + g.localIds.length, 0) }), typeKey);
       check("Vista VR en el navegador: recibe el modelo (sin volver a procesar el IFC) con sus materiales", got.type === "wood" && got.n > 0, `${JSON.stringify(got)} · ${((Date.now() - tOpen) / 1000).toFixed(1)} s`);

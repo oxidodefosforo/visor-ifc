@@ -161,7 +161,8 @@ export class VrUi {
     const buffer = await mRes.arrayBuffer();
     const v = this.viewer;
     step(`Abriendo el modelo (${(buffer.byteLength / 1048576).toFixed(1)} MB)…`);
-    await v.loadFragments(buffer, session.name);
+    const sizeMb = (buffer.byteLength / 1048576).toFixed(1);
+    await v.loadFragments(buffer, session.name, (k) => step(`Abriendo el modelo (${sizeMb} MB): ${k}…`));
     onLoaded(session.name);
     step("Aplicando materiales y entorno…");
     v.updateEnvironment(session.env);

@@ -252,21 +252,26 @@ export class Viewer {
    * Abre un modelo ya convertido a Fragments (lo usa la vista VR en el navegador, que recibe
    * el modelo de la app de escritorio sin volver a procesar el IFC).
    */
-  async loadFragments(buffer: ArrayBuffer, name: string) {
+  async loadFragments(buffer: ArrayBuffer, name: string, step: (s: string) => void = () => {}) {
     if (this.loading) throw new UserError("Ya se está cargando un modelo. Espera a que termine.");
     this.loading = true;
     try {
       if (this.currentModelId) await this.closeModel();
       const modelId = `${name.replace(/\.ifc$/i, "")}-${Date.now()}`;
+      step("fragments.load");
       const model = await this.fragments.core.load(buffer, { modelId, camera: this.world.camera.three });
       this.currentModelId = model.modelId;
+      step("unidades");
       this.units = await readProjectUnits(model).catch(() => ({}));
       this.nav.setModelBounds(model.box);
       this.env.setModelBounds(model.box);
       this.nav.enabled = true;
+      step("update");
       await this.fragments.core.update(true);
+      step("encuadre");
       await this.fitAll();
       this.setVisibility("all");
+      step("materiales");
       await this.appearance.analyze(model).catch((e) => console.warn("No se pudieron agrupar los materiales", e));
       return { modelId: model.modelId, name };
     } catch (err) {
