@@ -838,6 +838,9 @@ try {
     if (vrUrl) {
       // Navegador aparte (proceso GPU propio): con SwiftShader, la página principal en vista realista lo acapara.
       await page.evaluate(() => window.__viewer.setRealistic(false));
+      // Pausar el bucle de render de la página principal mientras trabaja el segundo navegador: en CI
+      // (4 núcleos, SwiftShader) los dos a la vez dejaban la carga de la página colgada > 2 min.
+      if (!ELECTRON) await page.evaluate(() => { window.__viewer.components.enabled = false; });
       const ctx2 = await (globalThis.__vrBrowser = await chromium.launch({ headless: !HEADED, args: GL_ARGS })).newContext({ viewport: { width: 900, height: 560 } });
       const p2 = await ctx2.newPage();
       p2.on("request", (r) => { const u = new URL(r.url()); if (!/^(blob|data):/.test(u.protocol) && !["localhost", "127.0.0.1"].includes(u.hostname)) external.push(r.url()); });
@@ -867,6 +870,7 @@ try {
       check("Vista VR en el navegador: recibe el modelo (sin volver a procesar el IFC) con sus materiales", got.type === "wood" && got.n > 0, `${JSON.stringify(got)} · ${((Date.now() - tOpen) / 1000).toFixed(1)} s`);
       await vrSession(p2, "VR desde la app (navegador)");
       await ctx2.close();
+      await page.evaluate(() => { const c = window.__viewer.components; if (!c.enabled) { c.enabled = true; c.update(); } });
     }
     globalThis.__vrServer?.close();
     await globalThis.__vrBrowser?.close();
