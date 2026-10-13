@@ -229,7 +229,7 @@ es lentísimo (capturas de >30 s): no usarlo.
   son `button[data-…]`. Además los desplegables de acabado se sustituyeron por una rejilla propia (Popover).
   Regla: no usar en `closest()` atributos que también estén en `body.dataset` (mismo fallo con `data-scope` en el
   propio menú).
-- **Menú contextual:** clic derecho sin arrastre (<5 px, <800 ms; `pointerup` en `window` porque camera-controls
+- **Menú contextual:** clic derecho sin arrastre (<5 px, sin límite de tiempo: en CI cada fotograma tardaba segundos; `pointerup` en `window` porque camera-controls
   captura el puntero en Órbita). Selección con `Raycasters.castRay` → `localId`. Ámbitos: instancia (o selección
   múltiple), tipo (`IsDefinedBy` aplanado contiene el `IFC…TYPE`), material IFC. Estilos del Highlighter:
   `mat:g` (1) < `mat:t` (2) < `mat:o` (3). Perfil: `byType` con clave `CLASE|Nombre del tipo` (exportable).

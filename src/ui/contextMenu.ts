@@ -3,7 +3,7 @@ import { configFromPreset, presetByKey, type MatConfig } from "../render/materia
 import { Popover, esc, presetGridHtml, swatch } from "./swatch";
 
 /**
- * Menú del botón derecho sobre un elemento (clic sin arrastrar; arrastrar con el derecho sigue
+ * Menú del botón derecho sobre un elemento (soltar sin haber movido el ratón >5 px; arrastrar con el derecho sigue
  * desplazando la vista). Permite cambiar el acabado de:
  *  - la instancia (o la selección, si el elemento forma parte de una selección múltiple),
  *  - su tipo IFC (todas las instancias del tipo),
@@ -46,8 +46,6 @@ export class ContextMenu {
     const dom = viewer.canvas;
     const o = { signal: this.ac.signal };
     dom.addEventListener("pointerdown", (e) => {
-      // e.timeStamp (momento del evento) y no performance.now(): con fotogramas lentos el manejador
-      // puede ejecutarse tarde y un clic corto parecía una pulsación larga (fallo visto en CI Windows).
       if (e.button === 2) this.down = { x: e.clientX, y: e.clientY, t: e.timeStamp };
     }, o);
     // pointerup en la ventana: camera-controls (Órbita) captura el puntero.
@@ -55,7 +53,9 @@ export class ContextMenu {
       const d = this.down;
       this.down = null;
       if (e.button !== 2 || !d) return;
-      if (Math.hypot(e.clientX - d.x, e.clientY - d.y) > 5 || e.timeStamp - d.t > 1000) {
+      // Sin límite de tiempo: en CI (SwiftShader, vista realista) entre pulsar y soltar pasaban 8,6 s
+      // porque cada fotograma tarda segundos; lo que distingue «desplazar» es haber movido el ratón.
+      if (Math.hypot(e.clientX - d.x, e.clientY - d.y) > 5) {
         this.lastIgnored = `arrastre: ${Math.hypot(e.clientX - d.x, e.clientY - d.y).toFixed(1)} px, ${(e.timeStamp - d.t).toFixed(0)} ms`;
         return; // fue un arrastre
       }
