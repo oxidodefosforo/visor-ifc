@@ -83,7 +83,7 @@ function createVrServer({ dist, mime, log }) {
       server = await listen(0); // ocupado: uno libre cualquiera
     }
     port = server.address().port;
-    log(`Servidor VR en http://localhost:${port}`);
+    log(`Servidor VR en http://127.0.0.1:${port}`);
     return port;
   }
 
@@ -92,7 +92,9 @@ function createVrServer({ dist, mime, log }) {
     const p = await ensure();
     const token = crypto.randomBytes(16).toString("hex");
     current = { token, json: Buffer.from(JSON.stringify(session)), model: Buffer.from(model) };
-    return `http://localhost:${p}/index.html?vr=${token}`;
+    // 127.0.0.1 y no «localhost»: en Windows localhost puede resolverse primero a ::1 (IPv6) y el servidor
+    // solo escucha en IPv4 (en CI la navegación se quedó colgada). 127.0.0.1 también es contexto seguro.
+    return `http://127.0.0.1:${p}/index.html?vr=${token}`;
   }
 
   function close() {

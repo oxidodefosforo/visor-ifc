@@ -236,7 +236,7 @@ es lentísimo (capturas de >30 s): no usarlo.
 - **VR:** Electron 44 **no tiene WebXR** (`navigator.xr` no existe ni con `--enable-features=WebXR`; comprobado).
   La app publica el modelo **ya convertido** (`model.getBuffer(false)`, Fragments comprimido) + perfil + entorno
   + cámara + ocultos en `electron/vrServer.cjs` (solo 127.0.0.1, token aleatorio) y abre Chrome/Edge en
-  `http://localhost:47821/index.html?vr=<token>` (localhost = contexto seguro). En navegador con gafas, el botón
+  `http://127.0.0.1:47821/index.html?vr=<token>` (127.0.0.1 = contexto seguro; no «localhost», que en Windows puede ir a ::1). En navegador con gafas, el botón
   entra directo. Durante la sesión se para el bucle de That Open (`components.enabled = false`) y three lleva
   el ritmo (`renderer.setAnimationLoop`); la cámara va en un `rig` (Group). `local-floor`: ojos a 1,6 m.
   Velocidad = clamp(base×0,35; 1,5; 6) m/s. Teletransporte: `model.raycast` con una cámara auxiliar en la pose

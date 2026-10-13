@@ -236,7 +236,7 @@ function start() {
     return { url, browser };
   });
   ipcMain.handle("open-url", (_e, url) => {
-    if (/^http:\/\/localhost:\d+\//.test(url)) return openInXrBrowser(url, shell, log);
+    if (/^http:\/\/(localhost|127\.0\.0\.1):\d+\//.test(url)) return openInXrBrowser(url, shell, log);
   });
   app.on("before-quit", () => vr.close());
   const win = createWindow();

@@ -809,7 +809,7 @@ try {
       await page.click("#btn-vr");
       await page.waitForSelector("[data-copy]", { timeout: 60_000 });
       vrUrl = await page.getAttribute("[data-copy]", "data-copy");
-      check("App de escritorio: el modelo se publica en un servidor local para el navegador", /^http:\/\/localhost:\d+\/index\.html\?vr=[a-f0-9]{32}$/.test(vrUrl), vrUrl);
+      check("App de escritorio: el modelo se publica en un servidor local para el navegador", /^http:\/\/127\.0\.0\.1:\d+\/index\.html\?vr=[a-f0-9]{32}$/.test(vrUrl), vrUrl);
       await page.click("[data-close]");
     } else {
       await vrSession(page, "VR en el navegador");
@@ -834,7 +834,13 @@ try {
       p2.on("pageerror", (e) => consoleErrors.push(e.message));
       await p2.addInitScript({ content: IWER_INIT });
       const tOpen = Date.now();
-      await p2.goto(vrUrl, { waitUntil: "domcontentloaded", timeout: 120_000 });
+      // Diagnóstico si la navegación falla: ¿responde el servidor local?
+      const probe = await fetch(vrUrl, { signal: AbortSignal.timeout(10_000) }).then((r) => `HTTP ${r.status}`).catch((e) => String(e));
+      try {
+        await p2.goto(vrUrl, { waitUntil: "domcontentloaded", timeout: 120_000 });
+      } catch (e) {
+        throw new Error(`No se pudo abrir ${vrUrl} en el navegador (servidor: ${probe}): ${e.message.split("\n")[0]}`);
+      }
       await p2.waitForSelector("[data-enter-vr]", { timeout: 120_000 });
       const got = await p2.evaluate((k) => ({ type: window.__viewer.appearance.profile.byType[k]?.preset, realistic: window.__viewer.appearance.realistic, n: window.__viewer.appearance.groups.reduce((n, g) => n + g.localIds.length, 0) }), typeKey);
       check("Vista VR en el navegador: recibe el modelo (sin volver a procesar el IFC) con sus materiales", got.type === "wood" && got.n > 0, `${JSON.stringify(got)} · ${((Date.now() - tOpen) / 1000).toFixed(1)} s`);
