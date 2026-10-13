@@ -188,3 +188,21 @@ select, input[type="color"] { font: inherit; font-size: 12.5px; color: var(--tex
 .preset-btn { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; text-align: left; }
 .preset-btn span:not(.caret):not(.sw) { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .preset-btn .caret { color: var(--muted); }
+
+/* ---------- VR y ventanas modales ---------- */
+.vr-btn { font-weight: 700; letter-spacing: .04em; }
+.vr-btn.ready { border-color: var(--ok); color: var(--ok); }
+.vr-btn.active { background: var(--ok); color: #04150c; }
+.modal { position: fixed; inset: 0; z-index: 60; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; padding: 20px; }
+.modal-card { position: relative; width: min(560px, 100%); max-height: 90vh; overflow: auto; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; box-shadow: 0 20px 50px rgba(0,0,0,.5); font-size: 13.5px; line-height: 1.45; }
+.modal-card h3 { margin: 0 0 8px; font-size: 17px; }
+.modal-card h4 { margin: 14px 0 6px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.modal-card .steps { padding-left: 20px; margin: 8px 0; }
+.modal-card .steps li { margin: 4px 0; }
+.modal-x { position: absolute; top: 8px; right: 8px; width: 28px; height: 28px; padding: 0; border-radius: 50%; font-size: 18px; line-height: 1; }
+.modal-actions { display: flex; gap: 6px; justify-content: flex-end; margin-top: 12px; flex-wrap: wrap; }
+.modal-card .big { font-size: 16px; padding: 10px 22px; margin: 8px 0; }
+.modal-card .warn { color: var(--error); }
+.vr-controls { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+.vr-controls th { text-align: left; font-weight: 600; padding: 3px 10px 3px 0; white-space: nowrap; vertical-align: top; }
+.vr-controls td { color: var(--muted); padding: 3px 0; }

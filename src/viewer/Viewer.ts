@@ -9,6 +9,7 @@ import { parseItemData, readProjectUnits, type ElementInfo, type ProjectUnits } 
 import { Navigator, type NavMode, type NavState } from "./Navigator";
 import { Appearance } from "../render/Appearance";
 import { Environment, type EnvSettings } from "../render/Environment";
+import { VRMode } from "./VR";
 
 export type LoadProgress = {
   /** 0..1 */
@@ -49,6 +50,7 @@ export class Viewer {
   nav!: Navigator;
   appearance!: Appearance;
   env!: Environment;
+  vr!: VRMode;
   private units: ProjectUnits = {};
   private currentModelId: string | null = null;
   private loading = false;
@@ -143,6 +145,9 @@ export class Viewer {
     // --- Navegación tipo Revizto (WASD/QE, mirar con el ratón, rueda hacia el cursor) ---
     this.nav = new Navigator(this.world, this.components, (s) => this.events.onNavChange?.(s));
     this.nav.attach();
+
+    // --- Realidad virtual (WebXR) ---
+    this.vr = new VRMode(this.world, this.components, this.fragments, this.nav, this.env);
   }
 
   /**
@@ -208,6 +213,56 @@ export class Viewer {
     } finally {
       this.loading = false;
     }
+  }
+
+  /**
+   * Abre un modelo ya convertido a Fragments (lo usa la vista VR en el navegador, que recibe
+   * el modelo de la app de escritorio sin volver a procesar el IFC).
+   */
+  async loadFragments(buffer: ArrayBuffer, name: string) {
+    if (this.loading) throw new UserError("Ya se está cargando un modelo. Espera a que termine.");
+    this.loading = true;
+    try {
+      if (this.currentModelId) await this.closeModel();
+      const modelId = `${name.replace(/\.ifc$/i, "")}-${Date.now()}`;
+      const model = await this.fragments.core.load(buffer, { modelId, camera: this.world.camera.three });
+      this.currentModelId = model.modelId;
+      this.units = await readProjectUnits(model).catch(() => ({}));
+      this.nav.setModelBounds(model.box);
+      this.env.setModelBounds(model.box);
+      this.nav.enabled = true;
+      await this.fragments.core.update(true);
+      await this.fitAll();
+      this.setVisibility("all");
+      await this.appearance.analyze(model).catch((e) => console.warn("No se pudieron agrupar los materiales", e));
+      return { modelId: model.modelId, name };
+    } catch (err) {
+      throw toUserError(err);
+    } finally {
+      this.loading = false;
+    }
+  }
+
+  /** Modelo actual en formato Fragments (para pasarlo a la vista VR del navegador). */
+  async modelBuffer(): Promise<ArrayBuffer | null> {
+    const model = this.currentModelId ? this.fragments.list.get(this.currentModelId) : null;
+    if (!model) return null;
+    const buf = await model.getBuffer(false);
+    return buf instanceof ArrayBuffer ? buf : new Uint8Array(buf as ArrayBufferLike).slice().buffer;
+  }
+
+  /** Pose de la cámara (posición y punto al que mira). */
+  cameraPose() {
+    const c = this.world.camera.controls;
+    return { pos: c.getPosition(new THREE.Vector3()).toArray(), target: c.getTarget(new THREE.Vector3()).toArray() };
+  }
+
+  async setCameraPose(p: { pos: number[]; target: number[] }) {
+    const [x, y, z] = p.pos;
+    const d = new THREE.Vector3(...(p.target as [number, number, number])).sub(new THREE.Vector3(x, y, z));
+    const t = new THREE.Vector3(x, y, z).addScaledVector(d.normalize(), 0.01);
+    await this.world.camera.controls.setLookAt(x, y, z, t.x, t.y, t.z, false);
+    await this.fragments.core.update(true);
   }
 
   /** Cierra el modelo actual y libera su memoria (GPU + worker + web-ifc). */
@@ -334,6 +389,13 @@ export class Viewer {
     return this.nav.setMode(mode);
   }
 
+  /** Elementos ocultos ahora mismo (para pasar la misma vista a VR). */
+  async hiddenLocalIds(): Promise<number[]> {
+    if (!this.currentModelId) return [];
+    const m = (await this.hider.getVisibilityMap(false)) as Record<string, Iterable<number>>;
+    return [...(m[this.currentModelId] ?? [])];
+  }
+
   /** Datos de visibilidad para pruebas/diagnóstico. */
   async visibilityCounts() {
     if (!this.currentModelId) return { visible: 0, hidden: 0 };
@@ -435,6 +497,7 @@ export class Viewer {
     this.disposed = true;
     try {
       this.world?.camera?.controls.removeEventListener("update", this.onCameraUpdate);
+      this.vr?.dispose();
       this.nav?.detach();
       this.env?.dispose();
       await this.closeModel();

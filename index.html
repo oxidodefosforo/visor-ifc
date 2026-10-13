@@ -29,6 +29,7 @@
         <button data-view="technical" class="active" title="Colores del IFC, para coordinación">Técnica</button>
         <button data-view="realistic" title="Materiales con textura, cielo, sol y sombras">Realista</button>
       </div>
+      <button id="btn-vr" class="vr-btn" disabled title="Ver el modelo con gafas de realidad virtual (Meta Quest con Link / Air Link)">VR</button>
       <div class="model-name" id="model-name"></div>
       <div class="update-status" id="update-status" hidden></div>
       <div class="app-version" id="app-version" hidden></div>
@@ -87,6 +88,7 @@
       </aside>
     </main>
 
+    <div id="modal" class="modal" hidden><div class="modal-card" id="modal-card" role="dialog" aria-modal="true"></div></div>
     <div id="toast" class="toast" role="alert" hidden></div>
     <script type="module" src="/src/main.ts"></script>
   </body>

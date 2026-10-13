@@ -339,6 +339,13 @@ export class Appearance {
     await this.applyAll();
   }
 
+  /** Sustituye el perfil completo (incluidas asignaciones por elemento): sesión VR. */
+  async replaceProfile(p: Profile) {
+    this.profile = { ...emptyProfile(), ...p };
+    this.save();
+    await this.applyAll();
+  }
+
   async clearProfile() {
     this.profile = emptyProfile();
     this.save();

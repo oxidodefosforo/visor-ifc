@@ -208,7 +208,8 @@ export class Environment {
     }, 120);
   }
 
-  private markShadows = () => {
+  /** Marca las mallas de Fragments para sombras (lo llama el renderizador; también el bucle de VR). */
+  readonly markShadows = () => {
     if (!this.enabled || !this.settings.shadows) return;
     this.world.scene.three.traverse((o) => {
       const m = o as THREE.Mesh;

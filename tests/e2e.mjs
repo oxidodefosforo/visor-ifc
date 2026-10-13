@@ -21,6 +21,7 @@ import { createServer, preview, build } from "vite";
 import { readdirSync, readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { join, resolve, basename } from "node:path";
 import * as WebIFC from "web-ifc";
+import { createRequire } from "node:module";
 
 const root = resolve(import.meta.dirname, "..");
 const outDir = join(root, "test-results");
@@ -138,6 +139,11 @@ const same = (panelRaw, ifcValue) => {
   return panelRaw === fmt(ifcValue);
 };
 
+// ---------- Emulador WebXR (IWER) ----------
+const IWER_INIT =
+  readFileSync(join(root, "node_modules/iwer/build/iwer.min.js"), "utf8") +
+  "\n;window.__xrdev = new IWER.XRDevice(IWER.metaQuest3); window.__xrdev.installRuntime({ forceInstall: true });";
+
 // ---------- Servidor / aplicación ----------
 let server, url, browser, page, electronApp;
 const GL_ARGS = ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist"];
@@ -146,7 +152,7 @@ if (ELECTRON) {
   electronApp = await _electron.launch({
     args: [...(process.getuid?.() === 0 ? ["--no-sandbox"] : []), ...GL_ARGS, root],
     cwd: root,
-    env: { ...process.env },
+    env: { ...process.env, VISOR_VR_NO_BROWSER: "1" },
   });
   page = await electronApp.firstWindow();
   await page.setViewportSize({ width: 1400, height: 850 }).catch(() => {});
@@ -166,6 +172,8 @@ if (ELECTRON) {
   browser = await chromium.launch({ headless: !HEADED, args: GL_ARGS });
   const ctx = await browser.newContext({ viewport: { width: 1400, height: 850 }, permissions: ["clipboard-read", "clipboard-write"] });
   page = await ctx.newPage();
+  // Gafas VR emuladas (IWER de Meta, Quest 3): sustituye a navigator.xr para probar la sesión WebXR.
+  await page.addInitScript({ content: IWER_INIT });
 }
 console.log(`IFC de prueba: ${ifcPath}\n`);
 
@@ -650,6 +658,123 @@ try {
     const tech = await page.evaluate(() => { const v = window.__viewer, sc = v.world.scene.three; return { styles: v.appearance.debug().styles.length, env: !!sc.environment, sun: !!sc.getObjectByName("visor-sun"), shadows: v.world.renderer.three.shadowMap.enabled }; });
     check("Volver a Vista técnica restaura colores IFC y luz", tech.styles === 0 && !tech.env && !tech.sun && !tech.shadows, JSON.stringify(tech));
     await page.click('[data-tab="info"]');
+    await page.evaluate(() => window.__viewer.appearance.clearProfile());
+    await page.setViewportSize({ width: 1400, height: 850 });
+  }
+
+
+  // 6c. Realidad virtual (WebXR con gafas emuladas) y paso del modelo al navegador
+  {
+    const waitFor = (fn, arg, timeout = 90_000) => page.waitForFunction(fn, arg, { timeout, polling: 250 });
+    await page.setViewportSize({ width: 900, height: 560 });
+    await page.evaluate(() => window.__viewer.fitAll());
+    // Preparar una vista con apariencia para comprobar que llega igual a la sesión VR del navegador
+    const typeKey = await page.evaluate(async () => {
+      const a = window.__viewer.appearance;
+      const t = [...a.types.values()].sort((x, y) => y.localIds.length - x.localIds.length)[0];
+      await a.setTypeConfig(t.key, { preset: "wood", color: "#ffffff", roughness: 0.6, metalness: 0, opacity: 1, scale: 1, texture: "wood" });
+      return t.key;
+    });
+    const VR_CHECK_POINT = async (p) => p.evaluate(async () => { const v = window.__viewer, r = v.canvas.getBoundingClientRect(); const model = [...v.fragmentsManager.list.values()][0]; const V = v.vr.marker.position.constructor; for (const [fx, fy] of [[0.4, 0.6], [0.3, 0.5], [0.6, 0.6], [0.5, 0.7], [0.45, 0.4]]) { const h = await model.raycast({ camera: v.world.camera.three, mouse: new V(r.left + r.width * fx, r.top + r.height * fy, 0), dom: v.canvas }); if (h) return h.point.toArray(); } return null; });
+    /** Prueba de sesión VR en una página con gafas emuladas: andar, girar, teletransporte y salir. */
+    const vrSession = async (p, label) => {
+      const aim = await VR_CHECK_POINT(p);
+      await p.waitForFunction(() => document.body.dataset.vr === "available", null, { timeout: 30_000 });
+      await (await p.$("[data-enter-vr]") ? p.click("[data-enter-vr]") : p.click("#btn-vr"));
+      await p.waitForFunction(() => document.body.dataset.vr === "active", null, { timeout: 60_000 });
+      const e0 = await p.evaluate(() => ({ eye: window.__viewer.vr.eyePosition(), yaw: window.__viewer.vr.rigYaw(), dir: window.__viewer.world.camera.three.getWorldDirection(window.__viewer.vr.marker.position.clone()).toArray() }));
+      await p.evaluate(() => window.__xrdev.controllers.left.updateAxes("thumbstick", 0, -1));
+      await p.waitForFunction((e) => { const q = window.__viewer.vr.eyePosition(); return Math.hypot(q[0] - e[0], q[2] - e[2]) > 0.5; }, e0.eye, { timeout: 30_000 });
+      await p.evaluate(() => window.__xrdev.controllers.left.updateAxes("thumbstick", 0, 0));
+      const e1 = await p.evaluate(() => window.__viewer.vr.eyePosition());
+      const mv = [e1[0] - e0.eye[0], e1[2] - e0.eye[2]], hd = [e0.dir[0], e0.dir[2]];
+      const cos = (mv[0] * hd[0] + mv[1] * hd[1]) / (Math.hypot(...mv) * Math.hypot(...hd));
+      check(`${label}: joystick izquierdo avanza hacia donde se mira (en horizontal)`, cos > 0.98 && Math.abs(e1[1] - e0.eye[1]) < 1e-6, `${Math.hypot(...mv).toFixed(2)} m`);
+      await p.evaluate(() => window.__xrdev.controllers.right.updateAxes("thumbstick", 1, 0));
+      await p.waitForFunction((y) => Math.abs(window.__viewer.vr.rigYaw() - y) > 1, e0.yaw, { timeout: 30_000 });
+      await p.evaluate(() => window.__xrdev.controllers.right.updateAxes("thumbstick", 0, 0));
+      await p.waitForTimeout(400);
+      const yaw = await p.evaluate(() => window.__viewer.vr.rigYaw());
+      const turned = Math.abs((((yaw - e0.yaw) % 360) + 540) % 360 - 180);
+      check(`${label}: joystick derecho gira 30° por paso`, Math.abs(turned - 30) < 1e-6, `${e0.yaw.toFixed(0)}° → ${yaw.toFixed(0)}°`);
+      if (aim) {
+        await p.evaluate((aim) => {
+          const v = window.__viewer, vr = v.vr, c = window.__xrdev.controllers.right;
+          const hand = vr.hands.find((h) => h.handedness === "right").controller;
+          const pos = hand.getWorldPosition(hand.position.clone());
+          const w = pos.clone().set(...aim).sub(pos).normalize();
+          const th = (-vr.rigYaw() * Math.PI) / 180;
+          const b = { x: w.x * Math.cos(th) + w.z * Math.sin(th), y: w.y, z: -w.x * Math.sin(th) + w.z * Math.cos(th) };
+          let q = [b.y, -b.x, 0, 1 - b.z]; const n = Math.hypot(...q); q = q.map((x) => x / n);
+          c.quaternion.set(q[0], q[1], q[2], q[3]);
+          c.updateButtonValue("trigger", 1);
+        }, aim);
+        await p.waitForFunction(() => window.__viewer.vr.target !== null, null, { timeout: 30_000 });
+        const aimed = await p.evaluate(() => ({ target: window.__viewer.vr.target.toArray(), hit: window.__viewer.vr.lastHit }));
+        await p.evaluate(() => window.__xrdev.controllers.right.updateButtonValue("trigger", 0));
+        await p.waitForFunction(() => window.__viewer.vr.lastTeleport !== null, null, { timeout: 30_000 });
+        const t = await p.evaluate(() => ({ t: window.__viewer.vr.lastTeleport, eye: window.__viewer.vr.eyePosition() }));
+        // El punto alcanzado está sobre el rayo del mando (es geometría real del modelo) y el salto va a ese destino.
+        const { point: hp, origin: o, dir: dr } = aimed.hit;
+        const v = [hp[0] - o[0], hp[1] - o[1], hp[2] - o[2]], along = v[0] * dr[0] + v[1] * dr[1] + v[2] * dr[2];
+        const off = Math.hypot(v[0] - along * dr[0], v[1] - along * dr[1], v[2] - along * dr[2]);
+        const same = Math.hypot(t.t[0] - aimed.target[0], t.t[1] - aimed.target[1], t.t[2] - aimed.target[2]);
+        const toAim = Math.hypot(hp[0] - aim[0], hp[1] - aim[1], hp[2] - aim[2]);
+        check(`${label}: gatillo = teletransporte al punto del modelo apuntado`, off < 0.05 && same < 1e-6 && t.eye[1] > t.t[1] + 1, `impacto a ${off.toFixed(3)} m del rayo, ${along.toFixed(1)} m de distancia (${toAim.toFixed(1)} m del punto buscado); ojos a ${(t.eye[1] - t.t[1]).toFixed(2)} m del suelo`);
+      }
+      await p.screenshot({ path: join(outDir, `09-vr-${label.includes("navegador") ? "navegador" : "directo"}.png`), timeout: 240_000 });
+      await p.evaluate(() => window.__viewer.vr.exit());
+      await p.waitForFunction(() => document.body.dataset.vr !== "active", null, { timeout: 30_000 });
+      const before = await p.evaluate(() => window.__viewer.cameraPose().pos);
+      await p.keyboard.down("KeyW");
+      await p.waitForTimeout(400);
+      await p.keyboard.up("KeyW");
+      await p.waitForTimeout(400);
+      const after = await p.evaluate(() => window.__viewer.cameraPose().pos);
+      check(`${label}: al salir de VR vuelve la navegación normal desde donde estabas`, Math.hypot(after[0] - before[0], after[1] - before[1], after[2] - before[2]) > 0.2);
+    };
+
+    let vrUrl = null;
+    if (ELECTRON) {
+      // Electron no tiene WebXR: el botón VR envía el modelo al servidor local y abre Chrome/Edge.
+      check("Electron no tiene WebXR: el botón VR ofrece abrir el navegador", (await page.evaluate(() => document.body.dataset.vr)) === "unsupported");
+      await page.click("#btn-vr");
+      await page.waitForSelector("[data-copy]", { timeout: 60_000 });
+      vrUrl = await page.getAttribute("[data-copy]", "data-copy");
+      check("App de escritorio: el modelo se publica en un servidor local para el navegador", /^http:\/\/localhost:\d+\/index\.html\?vr=[a-f0-9]{32}$/.test(vrUrl), vrUrl);
+      await page.click("[data-close]");
+    } else {
+      await vrSession(page, "VR en el navegador");
+      // Mismo camino que la app de escritorio, sin Electron: servidor local de electron/vrServer.cjs
+      const { createVrServer, MIME } = createRequire(import.meta.url)("../electron/vrServer.cjs");
+      const vrServer = createVrServer({ dist: join(root, "dist"), mime: MIME, log: () => {} });
+      const payload = await page.evaluate(async () => {
+        const buf = new Uint8Array(await window.__viewer.modelBuffer());
+        let bin = ""; for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
+        return { model: btoa(bin), session: await window.__vrUi.sessionData() };
+      });
+      vrUrl = await vrServer.publish({ model: Buffer.from(payload.model, "base64"), session: payload.session });
+      globalThis.__vrServer = vrServer;
+    }
+    // Abrir la sesión como lo haría Chrome/Edge (aquí Chromium con gafas emuladas)
+    if (vrUrl) {
+      // Navegador aparte (proceso GPU propio): con SwiftShader, la página principal en vista realista lo acapara.
+      await page.evaluate(() => window.__viewer.setRealistic(false));
+      const ctx2 = await (globalThis.__vrBrowser = await chromium.launch({ headless: !HEADED, args: GL_ARGS })).newContext({ viewport: { width: 900, height: 560 } });
+      const p2 = await ctx2.newPage();
+      p2.on("request", (r) => { const u = new URL(r.url()); if (!/^(blob|data):/.test(u.protocol) && !["localhost", "127.0.0.1"].includes(u.hostname)) external.push(r.url()); });
+      p2.on("pageerror", (e) => consoleErrors.push(e.message));
+      await p2.addInitScript({ content: IWER_INIT });
+      const tOpen = Date.now();
+      await p2.goto(vrUrl, { waitUntil: "domcontentloaded", timeout: 120_000 });
+      await p2.waitForSelector("[data-enter-vr]", { timeout: 120_000 });
+      const got = await p2.evaluate((k) => ({ type: window.__viewer.appearance.profile.byType[k]?.preset, realistic: window.__viewer.appearance.realistic, n: window.__viewer.appearance.groups.reduce((n, g) => n + g.localIds.length, 0) }), typeKey);
+      check("Vista VR en el navegador: recibe el modelo (sin volver a procesar el IFC) con sus materiales", got.type === "wood" && got.n > 0, `${JSON.stringify(got)} · ${((Date.now() - tOpen) / 1000).toFixed(1)} s`);
+      await vrSession(p2, "VR desde la app (navegador)");
+      await ctx2.close();
+    }
+    globalThis.__vrServer?.close();
+    await globalThis.__vrBrowser?.close();
     await page.evaluate(() => window.__viewer.appearance.clearProfile());
     await page.setViewportSize({ width: 1400, height: 850 });
   }

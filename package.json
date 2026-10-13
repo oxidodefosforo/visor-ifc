@@ -26,6 +26,7 @@
     "camera-controls": "3.1.2",
     "electron": "44.7.0",
     "electron-builder": "26.15.3",
+    "iwer": "2.5.0",
     "playwright": "1.56.0",
     "three": "0.186.1",
     "typescript": "7.0.2",

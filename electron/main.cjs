@@ -7,24 +7,11 @@ const { app, BrowserWindow, protocol, dialog, Menu, shell, ipcMain } = require("
 const path = require("node:path");
 const fs = require("node:fs");
 const { autoUpdater } = require("electron-updater");
+const { createVrServer, openInXrBrowser, MIME } = require("./vrServer.cjs");
 
 const SCHEME = "app";
 const HOST = "visor";
 const DIST = path.join(__dirname, "..", "dist");
-const MIME = {
-  ".html": "text/html; charset=utf-8",
-  ".js": "text/javascript; charset=utf-8",
-  ".mjs": "text/javascript; charset=utf-8",
-  ".css": "text/css; charset=utf-8",
-  ".wasm": "application/wasm",
-  ".json": "application/json",
-  ".svg": "image/svg+xml",
-  ".png": "image/png",
-  ".ico": "image/x-icon",
-  ".map": "application/json",
-  ".ttf": "font/ttf",
-  ".woff2": "font/woff2",
-};
 
 // ---------- Registro sencillo en %APPDATA%\Visor IFC\logs\main.log ----------
 let logFile = null;
@@ -241,6 +228,17 @@ function start() {
   log(`Inicio Visor IFC ${app.getVersion()} (packaged=${app.isPackaged}, updates=${updatesConfigured()})`);
   serveDist();
   ipcMain.handle("app-info", () => ({ version: app.getVersion(), packaged: app.isPackaged }));
+  // Vista VR: Electron no tiene WebXR → se abre la misma interfaz en Chrome/Edge (servidor solo local).
+  const vr = createVrServer({ dist: DIST, mime: MIME, log });
+  ipcMain.handle("vr-open", async (_e, payload) => {
+    const url = await vr.publish(payload);
+    const browser = openInXrBrowser(url, shell, log);
+    return { url, browser };
+  });
+  ipcMain.handle("open-url", (_e, url) => {
+    if (/^http:\/\/localhost:\d+\//.test(url)) return openInXrBrowser(url, shell, log);
+  });
+  app.on("before-quit", () => vr.close());
   const win = createWindow();
   buildMenu(win);
   setupUpdates(win);

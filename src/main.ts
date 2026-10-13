@@ -4,6 +4,7 @@ import type { NavMode } from "./viewer/Navigator";
 import { renderProperties } from "./ui/propertiesPanel";
 import { RealismPanels } from "./ui/realismPanels";
 import { ContextMenu } from "./ui/contextMenu";
+import { VrUi } from "./ui/vrUi";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -51,7 +52,10 @@ function refreshButtons(viewer: Viewer) {
   ui.navHud.hidden = !model;
   ui.viewSeg.querySelectorAll("button").forEach((b) => (b.disabled = !model || busy));
   if (!model) ui.navHelp.hidden = true;
+  vrUi?.refresh(model, busy);
 }
+
+let vrUi: VrUi | null = null;
 
 function showToast(message: string, kind: "error" | "info" = "error", detail?: string) {
   ui.toast.className = `toast ${kind}`;
@@ -263,12 +267,34 @@ async function start() {
     },
   });
 
+  // Gafas VR (WebXR). En la app de escritorio abre la vista en Chrome/Edge.
+  vrUi = new VrUi(viewer, $<HTMLButtonElement>("btn-vr"), $("modal"), $("modal-card"), (m, k = "info") => showToast(m, k), (on) => setRealistic(viewer, on));
+  const vrToken = VrUi.token();
+  if (vrToken) {
+    document.body.dataset.modelState = "loading";
+    void vrUi
+      .openSession(vrToken, (name) => {
+        ui.modelName.textContent = name;
+        document.body.dataset.modelState = "loaded";
+        refreshButtons(viewer);
+        panels?.renderMaterials();
+      })
+      .catch((err) => {
+        console.error(err);
+        vrUi?.close();
+        document.body.dataset.modelState = "error";
+        showToast("No se pudo cargar la vista VR.", "error", err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => refreshButtons(viewer));
+  }
+
   setupDesktop(viewer);
   renderProperties(ui.props, null, 0);
   refreshButtons(viewer);
   document.body.dataset.viewerReady = "true";
   // Acceso para pruebas automatizadas y depuración desde la consola.
-  (window as unknown as { __viewer?: Viewer }).__viewer = viewer;
+  (window as unknown as { __viewer?: Viewer; __vrUi?: VrUi | null }).__viewer = viewer;
+  (window as unknown as { __vrUi?: VrUi | null }).__vrUi = vrUi;
 
   const teardown = () => {
     ac.abort();
