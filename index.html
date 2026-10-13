@@ -24,6 +24,11 @@
         <button id="btn-isolate" disabled title="Mostrar solo el elemento seleccionado (I)">Aislar</button>
         <button id="btn-show" disabled title="Mostrar todos los elementos (R)">Restaurar</button>
       </div>
+      <div class="sep"></div>
+      <div class="seg view-seg" role="group" aria-label="Tipo de vista" id="view-seg">
+        <button data-view="technical" class="active" title="Colores del IFC, para coordinación">Técnica</button>
+        <button data-view="realistic" title="Materiales con textura, cielo, sol y sombras">Realista</button>
+      </div>
       <div class="model-name" id="model-name"></div>
       <div class="update-status" id="update-status" hidden></div>
       <div class="app-version" id="app-version" hidden></div>
@@ -71,8 +76,14 @@
         </div>
       </section>
       <aside class="panel" id="panel">
-        <h2>Información</h2>
-        <div id="props" class="props muted">Selecciona un elemento del modelo.</div>
+        <div class="tabs" role="tablist">
+          <button role="tab" data-tab="info" class="active">Información</button>
+          <button role="tab" data-tab="materials">Materiales</button>
+          <button role="tab" data-tab="env">Entorno</button>
+        </div>
+        <div class="tab" id="tab-info"><div id="props" class="props"></div></div>
+        <div class="tab" id="tab-materials" hidden><div id="materials" class="props materials"></div></div>
+        <div class="tab" id="tab-env" hidden><div id="env" class="props env"></div></div>
       </aside>
     </main>
 

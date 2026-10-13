@@ -452,6 +452,151 @@ try {
   await page.waitForTimeout(300);
   check("Esc deselecciona", (await page.textContent("#props")).includes("Haz clic en un elemento"));
 
+  // 6b. Vista realista y materiales (texturas)
+  {
+    const usedMaterials = () =>
+      page.evaluate(() => {
+        const used = {};
+        window.__viewer.world.scene.three.traverse((o) => {
+          if (!o.isMesh || o.name.startsWith("visor-")) return;
+          for (const m of [].concat(o.material)) {
+            const k = m.userData?.customId ?? "base";
+            used[k] = used[k] ?? { n: 0, maps: [], opacity: [] };
+            used[k].n++;
+            if (m.map?.name && !used[k].maps.includes(m.map.name)) used[k].maps.push(m.map.name);
+            if (!used[k].opacity.includes(m.opacity)) used[k].opacity.push(m.opacity);
+          }
+        });
+        return used;
+      });
+    const waitFor = async (fn, arg, timeout = 90_000) => {
+      try {
+        return await page.waitForFunction(fn, arg, { timeout, polling: 500 });
+      } catch (e) {
+        const state = await page.evaluate(() => JSON.stringify({ view: document.body.dataset.view, ...window.__viewer.appearance.debug() })).catch(() => "?");
+        throw new Error(`${e.message.split("\n")[0]} · esperando: ${fn.toString().slice(0, 140)} · estado: ${state.slice(0, 700)}`);
+      }
+    };
+    await page.setViewportSize({ width: 900, height: 560 }); // en SwiftShader cada fotograma realista cuesta segundos
+    await page.evaluate(() => localStorage.removeItem("visor.materials.profile"));
+    await page.evaluate(() => window.__viewer.appearance.clearProfile());
+    await page.evaluate(() => window.__viewer.fitAll());
+    check("Los materiales base son PBR (MeshStandardMaterial)", await page.evaluate(() => { let ok = false, bad = false; window.__viewer.world.scene.three.traverse((o) => { if (o.isMesh && !o.name.startsWith("visor-")) for (const m of [].concat(o.material)) { if (m.isMeshStandardMaterial) ok = true; if (m.isMeshLambertMaterial && !m.userData?.customId) bad = true; } }); return ok && !bad; }));
+
+    await page.click('[data-tab="materials"]');
+    await page.waitForSelector(".mat-list .mat", { timeout: 60_000 });
+    const groups = await page.$$eval(".mat", (els) => els.map((e) => ({ name: e.dataset.name, count: Number(e.querySelector(".count").textContent) })));
+    const ifcMaterials = (() => {
+      const names = new Set();
+      for (const m of readFileSync(ifcPath, "latin1").matchAll(/=IFCMATERIAL\('([^']*)'/g)) names.add(m[1]);
+      return names;
+    })();
+    const withGeometry = await page.evaluate(async () => (await [...window.__viewer.fragmentsManager.list.values()][0].getItemsIdsWithGeometry()).length);
+    const total = groups.reduce((n, g) => n + g.count, 0);
+    check(
+      "Panel Materiales: grupos por material IFC con recuento",
+      groups.length > 1 && groups.filter((g) => g.name !== "(sin material)").every((g) => ifcMaterials.has(g.name)) && total === withGeometry,
+      groups.map((g) => `${g.name} (${g.count})`).join(" · ") + ` = ${total} de ${withGeometry} elementos con geometría`,
+    );
+
+    const t0 = Date.now();
+    await page.click('[data-act="auto"]');
+    await waitFor(() => document.body.dataset.view === "realistic");
+    const presets = await page.$$eval(".mat", (els) => Object.fromEntries(els.map((e) => [e.dataset.name, e.querySelector('select[data-role="preset"]').value])));
+    const concreteName = groups.find((g) => /concrete/i.test(g.name))?.name;
+    const steelName = groups.find((g) => /steel/i.test(g.name))?.name;
+    check("Asignación automática por nombre (hormigón → Hormigón, acero → Acero)", presets[concreteName] === "concrete" && presets[steelName] === "steel", JSON.stringify(presets));
+    const env = await page.evaluate(() => { const v = window.__viewer, sc = v.world.scene.three, r = v.world.renderer.three; return { env: !!sc.environment, bg: !!sc.background?.isCubeTexture, aces: r.toneMapping === 4, shadows: r.shadowMap.enabled, sun: !!sc.getObjectByName("visor-sun") }; });
+    check("Vista realista: cielo, iluminación de entorno, sol con sombras y ACES", env.env && env.bg && env.aces && env.shadows && env.sun, `${JSON.stringify(env)} · ${((Date.now() - t0) / 1000).toFixed(1)} s`);
+    await waitFor((name) => Object.keys(window.__viewer.appearance.debug().registry).length > 0, null);
+    let used = await usedMaterials();
+    const textured = Object.entries(used).filter(([k, u]) => k.startsWith("mat:g:") && u.maps.length);
+    check("Elementos dibujados con material texturizado", textured.length > 0, textured.map(([k, u]) => `${u.maps.join("+")} en ${u.n} malla(s)`).join(", "));
+    // Regresión: Fragments dibuja los elementos con estilo sobre la geometría base en la misma
+    // posición; si un estilo no va delante (desfase de profundidad), se ve el material base.
+    const offs = await page.evaluate(() => {
+      let maxStyle = -Infinity, minBase = Infinity;
+      window.__viewer.world.scene.three.traverse((o) => {
+        if (!o.isMesh || o.userData.tileId === undefined) return;
+        for (const m of [].concat(o.material)) {
+          if (m.isLodMaterial || m.isShaderMaterial || !m.polygonOffset) continue;
+          if (m.userData?.customId) maxStyle = Math.max(maxStyle, m.polygonOffsetFactor);
+          else minBase = Math.min(minBase, m.polygonOffsetFactor);
+        }
+      });
+      return { maxStyle, minBase };
+    });
+    check("Apariencias por delante de la geometría base (sin parpadeo ni material base encima)", offs.maxStyle < 0 && offs.maxStyle < offs.minBase, JSON.stringify(offs));
+    await page.screenshot({ path: join(outDir, "06-realista.png"), timeout: 240_000 });
+
+    // Cambiar a ladrillo y editar en vivo
+    const sel = (n) => `.mat[data-name="${n.replace(/"/g, '\\"')}"]`;
+    await page.selectOption(`${sel(concreteName)} select[data-role="preset"]`, "brick");
+    await waitFor(() => Object.values(window.__viewer.appearance.debug().registry).flat().some((m) => m.map === "brick"));
+    await page.click(`${sel(concreteName)} .mat-row`);
+    await page.waitForSelector(`${sel(concreteName)} .editor`);
+    await page.$eval(`${sel(concreteName)} input[data-key="roughness"]`, (el) => { el.value = "0.25"; el.dispatchEvent(new Event("input", { bubbles: true })); });
+    await waitFor(() => Object.values(window.__viewer.appearance.debug().registry).flat().some((m) => m.map === "brick" && Math.abs(m.roughness - 0.25) < 1e-6));
+    check("Cambiar preset (Ladrillo) y editar rugosidad en vivo", true);
+    const saved = await page.evaluate((n) => JSON.parse(localStorage.getItem("visor.materials.profile")).byMaterial[n], concreteName);
+    check("El perfil de materiales se guarda en el equipo", saved?.preset === "brick" && saved?.roughness === 0.25, JSON.stringify(saved));
+
+    // Selección sobre la vista realista y asignación por elemento
+    const groupIds = await page.evaluate((n) => window.__viewer.appearance.groups.find((g) => g.name === n).localIds, concreteName);
+    await page.evaluate((ids) => window.__viewer.selectLocalIds(ids), groupIds);
+    await waitFor(() => { let s = false; window.__viewer.world.scene.three.traverse((o) => { if (o.isMesh) for (const m of [].concat(o.material)) if (m.userData?.customId === "select") s = true; }); return s; });
+    check("La selección se ve por encima del material", true);
+    await page.waitForSelector('[data-testid="sel-box"]');
+    await page.selectOption('[data-role="sel-preset"]', "glass");
+    await page.click('[data-act="sel-apply"]');
+    await page.evaluate(() => window.__viewer.clearSelection());
+    // Tras deseleccionar: el vidrio debe estar y NO debe quedar ningún material de selección (bug de
+    // Fragments: los elementos se quedaban naranjas si el estilo se creaba con la selección activa).
+    // Se miran los tramos de geometría que realmente se dibujan (Fragments deja materiales sin usar en la lista).
+    await waitFor(() => {
+      let g = false, sel = false;
+      window.__viewer.world.scene.three.traverse((o) => {
+        if (!o.isMesh || !Array.isArray(o.material)) return;
+        for (const gr of o.geometry.groups) {
+          const m = o.material[gr.materialIndex];
+          if (!m || gr.count === 0) continue;
+          if (String(m.userData?.customId).startsWith("mat:o:") && m.opacity < 1) g = true;
+          if (m.userData?.customId === "select") sel = true;
+        }
+      });
+      return g && !sel;
+    });
+    used = await usedMaterials();
+    check("Material por elemento (vidrio) aplicado sobre el del grupo al deseleccionar", Object.entries(used).some(([k, u]) => k.startsWith("mat:o:") && u.opacity.some((o) => o < 1)), Object.entries(used).map(([k, u]) => `${k}:${u.n}${u.maps.length ? "(" + u.maps + ")" : ""}${u.opacity.some((o) => o < 1) ? "[transp.]" : ""}`).join(" "));
+    await page.screenshot({ path: join(outDir, "07-vidrio-ladrillo.png"), timeout: 240_000 });
+
+    // Exportar / importar perfil
+    const exported = await page.evaluate(() => window.__viewer.appearance.exportProfile());
+    await page.evaluate(() => window.__viewer.appearance.clearProfile());
+    await page.evaluate((j) => window.__viewer.appearance.importProfile(j), exported);
+    const reimported = await page.evaluate((n) => window.__viewer.appearance.configForMaterial(n), concreteName);
+    check("Exportar e importar el perfil de materiales", reimported?.preset === "brick" && JSON.parse(exported).byMaterial[concreteName]?.preset === "brick");
+
+    // Entorno: hora del día
+    await page.click('[data-tab="env"]');
+    const sunA = await page.evaluate(() => window.__viewer.world.scene.three.getObjectByName("visor-sun").position.toArray());
+    await page.$eval('input[data-env="hour"]', (el) => { el.value = "8"; el.dispatchEvent(new Event("input", { bubbles: true })); });
+    const sunB = await page.evaluate(() => window.__viewer.world.scene.three.getObjectByName("visor-sun").position.toArray());
+    check("Entorno: la hora del día mueve el sol", sunA[1] > sunB[1], `altura del sol ${sunA[1].toFixed(1)} → ${sunB[1].toFixed(1)}`);
+    await page.$eval('input[data-env="hour"]', (el) => { el.value = "15"; el.dispatchEvent(new Event("input", { bubbles: true })); });
+
+    // Volver a técnica
+    await page.click('[data-view="technical"]');
+    await waitFor(() => document.body.dataset.view === "technical");
+    // La operación es asíncrona (el indicador de vista cambia al empezar): esperar a que termine.
+    await waitFor(() => window.__viewer.appearance.debug().styles.length === 0 && !window.__viewer.world.scene.three.environment, null, 30_000);
+    const tech = await page.evaluate(() => { const v = window.__viewer, sc = v.world.scene.three; return { styles: v.appearance.debug().styles.length, env: !!sc.environment, sun: !!sc.getObjectByName("visor-sun"), shadows: v.world.renderer.three.shadowMap.enabled }; });
+    check("Volver a Vista técnica restaura colores IFC y luz", tech.styles === 0 && !tech.env && !tech.sun && !tech.shadows, JSON.stringify(tech));
+    await page.click('[data-tab="info"]');
+    await page.evaluate(() => window.__viewer.appearance.clearProfile());
+    await page.setViewportSize({ width: 1400, height: 850 });
+  }
+
   // 7. Cerrar modelo y liberar memoria
   const memBefore = await page.evaluate(() => window.__viewer.debugInfo());
   await page.click("#btn-close");
@@ -498,7 +643,7 @@ try {
   const realErrors = consoleErrors.filter((e) => !e.includes("UserError") && !e.includes("Failed to load resource"));
   check("Sin errores inesperados en consola", realErrors.length === 0, realErrors.slice(0, 3).join(" | "));
 } catch (err) {
-  check("Ejecución de la prueba", false, String(err?.message ?? err));
+  check("Ejecución de la prueba", false, String(err?.message ?? err) + " @ " + String(err?.stack ?? "").split("\n").find((l) => l.includes("e2e.mjs"))?.trim());
   await page.screenshot({ path: join(outDir, "error.png") }).catch(() => {});
 } finally {
   await browser?.close();

@@ -7,6 +7,8 @@ import type * as FRAGS from "@thatopen/fragments";
 import fragmentsWorkerUrl from "@thatopen/fragments/worker?url";
 import { parseItemData, readProjectUnits, type ElementInfo, type ProjectUnits } from "./properties";
 import { Navigator, type NavMode, type NavState } from "./Navigator";
+import { Appearance } from "../render/Appearance";
+import { Environment, type EnvSettings } from "../render/Environment";
 
 export type LoadProgress = {
   /** 0..1 */
@@ -45,6 +47,8 @@ export class Viewer {
   private highlighter!: OBF.Highlighter;
   private hider!: OBC.Hider;
   nav!: Navigator;
+  appearance!: Appearance;
+  env!: Environment;
   private units: ProjectUnits = {};
   private currentModelId: string | null = null;
   private loading = false;
@@ -65,7 +69,7 @@ export class Viewer {
     await this.world.camera.controls.setLookAt(30, 25, 30, 0, 0, 0);
     this.components.init();
 
-    this.components.get(OBC.Grids).create(this.world);
+    const grid = this.components.get(OBC.Grids).create(this.world);
     this.components.get(OBC.Raycasters).get(this.world);
 
     // --- Fragments (worker local) ---
@@ -84,9 +88,17 @@ export class Viewer {
     this.fragments.core.models.materials.list.onItemSet.add(({ value: material }) => {
       if ("isLodMaterial" in material && material.isLodMaterial) return;
       material.polygonOffset = true;
-      if (material.userData?.customId === SELECT_STYLE) {
+      const customId: string | undefined = material.userData?.customId;
+      if (customId === SELECT_STYLE) {
         material.polygonOffsetFactor = -2;
         material.polygonOffsetUnits = -2;
+      } else if (customId) {
+        // Cualquier estilo (apariencias «mat:*» de la vista realista) va delante de la base.
+        // Fragments dibuja los elementos resaltados sobre la geometría base en la misma posición;
+        // con el desfase aleatorio, en ~la mitad de las cargas ganaba la base y el núcleo/losas
+        // se veían sin textura (causa verificada ocultando el material base).
+        material.polygonOffsetFactor = -1;
+        material.polygonOffsetUnits = -1;
       } else {
         material.polygonOffsetUnits = 1;
         material.polygonOffsetFactor = Math.random();
@@ -117,13 +129,33 @@ export class Viewer {
     this.highlighter.events[SELECT_STYLE].onClear.add(() => {
       this.selectionRequest++;
       this.events.onSelectionChange?.(null, 0);
+      this.refreshTilesSoon();
     });
+    this.highlighter.events[SELECT_STYLE].onHighlight.add(() => this.refreshTilesSoon());
 
     this.hider = this.components.get(OBC.Hider);
+
+    // --- Apariencia realista (materiales PBR + texturas) y entorno (cielo, sol, sombras) ---
+    this.appearance = new Appearance(this.fragments, this.highlighter);
+    this.appearance.install(); // antes de cargar modelos: intercepta la creación de materiales
+    this.env = new Environment(this.world, grid);
 
     // --- Navegación tipo Revizto (WASD/QE, mirar con el ratón, rueda hacia el cursor) ---
     this.nav = new Navigator(this.world, this.components, (s) => this.events.onNavChange?.(s));
     this.nav.attach();
+  }
+
+  /**
+   * Tras seleccionar/deseleccionar, el Highlighter repinta con updateColors, que actualiza las mallas
+   * de Fragments en paralelo con los highlight (no después). Una actualización posterior asegura que
+   * la apariencia de debajo (vista realista) se restaura sin tener que mover la cámara.
+   */
+  private refreshTimer = 0;
+  private refreshTilesSoon() {
+    window.clearTimeout(this.refreshTimer);
+    this.refreshTimer = window.setTimeout(() => {
+      if (this.fragments?.initialized && !this.disposed) void this.fragments.core.update(true);
+    }, 120);
   }
 
   private onCameraUpdate = () => {
@@ -161,11 +193,14 @@ export class Viewer {
       this.currentModelId = model.modelId;
       this.units = await readProjectUnits(model).catch(() => ({}));
       this.nav.setModelBounds(model.box);
+      this.env.setModelBounds(model.box);
       this.nav.enabled = true;
       onProgress({ value: 0.97, stage: "Preparando vista" });
       await this.fragments.core.update(true);
       await this.fitAll();
       this.setVisibility("all");
+      // Agrupar por material IFC (para el panel Materiales) sin retrasar la apertura.
+      void this.appearance.analyze(model).catch((e) => console.warn("No se pudieron agrupar los materiales", e));
       onProgress({ value: 1, stage: "Modelo cargado" });
       return { modelId: model.modelId, name: file.name };
     } catch (err) {
@@ -181,6 +216,7 @@ export class Viewer {
     if (!id) return;
     await this.highlighter.clear(SELECT_STYLE);
     this.currentModelId = null;
+    this.appearance.reset();
     this.nav.enabled = false;
     this.units = {};
     await this.fragments.core.disposeModel(id);
@@ -229,6 +265,30 @@ export class Viewer {
 
   async clearSelection() {
     await this.highlighter.clear(SELECT_STYLE);
+  }
+
+  /** Vista realista (texturas, cielo, sol, sombras) o técnica (colores del IFC). */
+  async setRealistic(on: boolean) {
+    await this.env.setEnabled(on);
+    await this.appearance.setRealistic(on);
+    await this.fragments.core.update(true);
+  }
+
+  updateEnvironment(patch: Partial<EnvSettings>) {
+    this.env.update(patch);
+  }
+
+  /** Selecciona elementos del modelo actual por localId (p. ej. todos los de un material). */
+  async selectLocalIds(ids: number[]) {
+    if (!this.currentModelId || !ids.length) return;
+    await this.highlighter.highlightByID(SELECT_STYLE, { [this.currentModelId]: new Set(ids) }, true, false);
+  }
+
+  /** Elementos seleccionados (localIds del modelo actual). */
+  selectedLocalIds(): number[] {
+    const sel = this.selection();
+    if (!sel || !this.currentModelId) return [];
+    return [...(sel[this.currentModelId] ?? [])];
   }
 
   setNavMode(mode: NavMode) {
@@ -337,6 +397,7 @@ export class Viewer {
     try {
       this.world?.camera?.controls.removeEventListener("update", this.onCameraUpdate);
       this.nav?.detach();
+      this.env?.dispose();
       await this.closeModel();
     } catch (e) {
       console.warn("Error al cerrar el modelo durante dispose", e);

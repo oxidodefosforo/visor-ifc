@@ -141,7 +141,7 @@ function asTsv(info: ElementInfo) {
 
 export function renderProperties(el: HTMLElement, info: ElementInfo | null, count: number, actions?: PanelActions) {
   if (!info) {
-    el.className = "props empty";
+    el.className = "props is-empty";
     el.innerHTML = `<div class="props-empty">
       <p>Haz clic en un elemento del modelo para ver su información.</p>
       <p class="muted small">Esc deselecciona · F encuadra todo</p></div>`;

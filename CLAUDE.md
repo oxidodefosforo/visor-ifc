@@ -55,6 +55,11 @@ src/viewer/Viewer.ts    Motor: Components, World, FragmentsManager, IfcLoader, H
 src/viewer/Navigator.ts   Navegación tipo Revizto (Recorrido/Órbita, WASD/QE, mirar, desplazar, rueda al cursor)
 src/viewer/properties.ts  ItemData → ElementInfo (GlobalId, clase, nombre, tipo, nivel, material, Psets/Qtos con unidades)
 src/ui/propertiesPanel.ts Panel de información estilo Revizto (buscador, secciones plegables, copiar, Copiar todo TSV)
+src/ui/realismPanels.ts   Pestañas Materiales (grupos por material IFC, presets, editor, imagen propia, perfil) y Entorno
+src/render/Appearance.ts  Apariencias: intercepta MaterialManager.new (Lambert→PBR) y aplica estilos «mat:g/mat:o» del Highlighter
+src/render/materials.ts   Presets PBR, reglas de asignación automática, material triplanar (onBeforeCompile)
+src/render/textures.ts    Texturas procedurales (canvas 2D, sin descargas) e imágenes propias
+src/render/Environment.ts Vista realista: cielo físico (Sky), PMREM, sol con sombras, ACES, suelo, hora/orientación
 src/style.css           Estilos (tema oscuro)
 scripts/copy-wasm.mjs   Copia node_modules/web-ifc/*.wasm → public/wasm/ (predev/prebuild)
 tests/e2e.mjs           Prueba e2e Playwright + contraste con web-ifc en Node
@@ -136,6 +141,47 @@ por fases) → `FragmentsManager` (worker) → `onItemSet` añade `model.object`
 - El panel guarda el valor original en `data-raw` (la e2e compara contra web-ifc con tolerancia).
   Búsqueda y plegado de secciones se conservan entre selecciones (plegado en localStorage).
 
+## Vista realista y materiales (v0.4, decisiones)
+
+- **Dos vistas:** Técnica (colores del IFC, para coordinar) y Realista (texturas, cielo, sol, sombras).
+  Las apariencias solo se aplican en Realista; volver a Técnica las retira y restaura la luz.
+- **PBR:** `Appearance.install()` sustituye el `MaterialManager.new` de Fragments para devolver
+  `MeshStandardMaterial` en vez de Lambert (también en Técnica; aspecto equivalente).
+- **Texturas triplanares:** la geometría IFC no trae UV; se proyecta en coordenadas del mundo desde X/Y/Z
+  y se mezcla por la normal (`onBeforeCompile`). Texturas procedurales generadas en canvas (hormigón,
+  encofrado, ladrillo, bloque, enlucido, madera, parquet, cerámico, piedra, metal, asfalto, césped,
+  grava) + imágenes propias del usuario (reducidas a ≤1024 px, guardadas en localStorage).
+- **Apariencias = estilos del Highlighter de That Open**: `mat:g:<hash>` por material IFC (prioridad 1),
+  `mat:o:<hash>` por elemento (prioridad 2); la selección tiene prioridad máxima y al deseleccionar
+  vuelve la apariencia. Agrupación por material IFC (`HasAssociations`, o el del tipo).
+- **Profundidad (bug real, verificado):** Fragments dibuja los elementos con estilo **sobre** la geometría
+  base en la misma posición. El `polygonOffsetFactor = Math.random()` (anti z-fighting) se aplicaba
+  también a los estilos y, según la carga, ganaba la base: núcleo/losas sin textura en ~50 % de las
+  cargas. Ahora todo material con `customId` va delante (−1; selección −2). La e2e lo comprueba.
+- **Selección y estilos nuevos (bug de Fragments 3.4.8, verificado):** si se crea un estilo mientras
+  sus elementos están seleccionados, al deseleccionar quedaban naranjas (la definición reutiliza el
+  hueco de la selección y las mallas no se reconstruyen). `applyAll` quita la selección antes de cambiar
+  estilos y no la restaura (sin carreras y se ve el resultado).
+- `applyAll` termina con `fragments.core.update(true)` y la deselección programa otro: `updateColors`
+  del Highlighter lanza la actualización de mallas en paralelo con los highlight, no después.
+- **Acero:** el preset «Acero estructural» es pintado/mate (metalness 0.25). Con metalness ~1 reflejaba
+  el cielo y parecía cromo azulado. Inoxidable/aluminio aparte. Reglas de nombre: galvan→galvanizado,
+  stainless/inoxidable→inoxidable, steel/acero/rebar→estructural.
+- **Exposición:** base 0.175 (× control del panel). Calibrado con capturas: con 0.35 las caras al sol se
+  saturaban y ACES aplanaba las texturas.
+- **Entorno:** cielo físico (`Sky` de three) a cubemap para el fondo y PMREM para la iluminación; sol
+  direccional con sombras (mapa 2048, se ajusta al tamaño del modelo), suelo neutro/césped/ninguno.
+  Las mallas de Fragments se marcan `castShadow/receiveShadow` antes de cada render.
+- Perfil (material IFC → configuración) en localStorage, exportable/importable en JSON para reutilizarlo
+  entre proyectos (los nombres de material de Revit se repiten).
+- Limitación: los objetos lejanos que Fragments dibuja simplificados (LOD) no llevan apariencia.
+
+**Pruebas visuales — cuidado:** medir píxeles con un `renderer.render()` manual NO equivale a lo que
+dibuja la app (se salta `onBeforeUpdate`, p. ej. el marcado de sombras): dio falsos fallos. Medir sobre
+capturas reales (`page.screenshot`). Contar materiales en `mesh.material` también engaña: Fragments deja
+materiales sin usar en la lista; mirar `geometry.groups` con `count > 0`. En SwiftShader, `textureGrad`
+es lentísimo (capturas de >30 s): no usarlo.
+
 ## Escritorio y actualizaciones (decisiones)
 
 - **Electron, no Tauri.** Mismo Chromium en todos los PCs (WebGL/WASM/workers ya validados), instalador
@@ -193,7 +239,14 @@ v0.3 (navegación + información): e2e 49/49 en build (×3), dev y Electron (48/
 dirección de W/S/A/D/E/Q, Shift, velocidad, mirar, desplazar, rueda adelante/atrás, Órbita, nivel
 contrastado con IFCRELCONTAINEDINSPATIALSTRUCTURE, unidades m³/mm, buscador y copia al portapapeles.
 
+v0.4 (vista realista y materiales): e2e 62/62 en build y dev, 61/61 en Electron (SwiftShader con
+`--ignore-gpu-blocklist`, que reproducía el fallo de profundidad). Texturas del núcleo estables en
+capturas reales (3/3 tras la corrección; antes ~50 %). Asignación automática, cambio de preset y
+edición en vivo, material por elemento (vidrio) sin restos de selección, perfil exportar/importar,
+hora del día, vuelta a Técnica.
+
 **No probado:** instalador y app en Windows real; sensación de la navegación con GPU real (aquí ~3 fps);
+aspecto y rendimiento de la vista realista con GPU real (sombras 2048 px, PMREM);
 unidades derivadas de MEP (IfcDerivedUnit: caudal, presión…) — lógica escrita, sin IFC MEP para probar. Modelos MEP (no había IFC MEP disponible), IFC2x3, modelos >100 MB, Firefox/Safari,
 GPU real (solo render por software), Psets de tipo con valores (los tipos del modelo de prueba no
 tienen Psets), relaciones IfcPropertyEnumeratedValue/List/Bounded (lógica escrita, sin datos).

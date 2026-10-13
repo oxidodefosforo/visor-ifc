@@ -80,6 +80,24 @@ Abajo en el centro eliges el modo: **Recorrido** (por defecto) u **Órbita**. El
 conjuntos de propiedades y cantidades con sus unidades. Escribe en «Buscar propiedad o valor…» para filtrar,
 haz clic en un valor para copiarlo y usa **Copiar todo** para pegar la ficha en Excel.
 
+## Vista realista y materiales
+Arriba, el selector **Técnica / Realista** cambia el tipo de vista:
+- **Técnica:** colores del IFC, para coordinar.
+- **Realista:** materiales con textura, cielo, sol y sombras.
+
+**Pestaña Materiales** (panel derecho): lista los materiales IFC del modelo con su nº de elementos.
+- **Asignar automáticamente:** pone hormigón, acero, vidrio, ladrillo… según el nombre del material.
+- En cada material eliges un acabado (Hormigón, Encofrado, Ladrillo, Bloque, Enlucido, Pintura, Piedra,
+  Cerámico, Madera, Parquet, Acero, Aluminio, Vidrio, Asfalto, Grava, Césped…). Haz clic en el nombre para
+  ajustar **color, escala de la textura, rugosidad, metálico y opacidad**, o **carga una imagen tuya**
+  (foto de una textura) como textura.
+- **Ver** selecciona en el modelo los elementos de ese material.
+- Con elementos seleccionados puedes darles un material distinto al de su grupo.
+- **Exportar / Importar perfil** guarda tus asignaciones en un archivo para reutilizarlas en otros
+  proyectos (los nombres de material de Revit suelen repetirse). Las asignaciones se recuerdan en el equipo.
+
+**Pestaña Entorno:** hora del día, orientación del sol, exposición, sombras y tipo de suelo.
+
 ## Problemas frecuentes
 - **«No se pudo iniciar el motor IFC»**: cierra con `Ctrl + C` y vuelve a ejecutar `npm run dev`
   (copia los archivos WASM que necesita el lector IFC).

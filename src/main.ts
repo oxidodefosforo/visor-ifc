@@ -2,6 +2,7 @@ import "./style.css";
 import { Viewer, UserError, type VisibilityState } from "./viewer/Viewer";
 import type { NavMode } from "./viewer/Navigator";
 import { renderProperties } from "./ui/propertiesPanel";
+import { RealismPanels } from "./ui/realismPanels";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -26,6 +27,8 @@ const ui = {
   navHelp: $("nav-help"),
   navHelpBtn: $<HTMLButtonElement>("nav-help-btn"),
   speedVal: $("speed-val"),
+  viewSeg: $("view-seg"),
+  panel: $("panel"),
   toast: $("toast"),
   viewport: $("viewport"),
 };
@@ -45,6 +48,7 @@ function refreshButtons(viewer: Viewer) {
   ui.show.disabled = !model || busy || viewer.visibilityState === "all";
   ui.empty.hidden = model || busy;
   ui.navHud.hidden = !model;
+  ui.viewSeg.querySelectorAll("button").forEach((b) => (b.disabled = !model || busy));
   if (!model) ui.navHelp.hidden = true;
 }
 
@@ -103,6 +107,7 @@ async function openFile(viewer: Viewer, file: File) {
     const secs = ((performance.now() - started) / 1000).toFixed(1);
     showToast(`Modelo cargado en ${secs} s.`, "info");
     document.body.dataset.modelState = "loaded";
+    panels?.renderMaterials();
   } catch (err) {
     console.error(err);
     const e = err instanceof UserError ? err : new UserError("No se pudo cargar el modelo.", String(err));
@@ -114,12 +119,31 @@ async function openFile(viewer: Viewer, file: File) {
   }
 }
 
+let panels: RealismPanels | null = null;
+
+function showTab(tab: string) {
+  ui.panel.querySelectorAll<HTMLButtonElement>("[data-tab]").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
+  for (const t of ["info", "materials", "env"]) $(`tab-${t}`).hidden = t !== tab;
+  if (tab === "materials") panels?.renderMaterials();
+  document.body.dataset.tab = tab;
+}
+
+async function setRealistic(viewer: Viewer, on: boolean) {
+  ui.viewSeg.querySelectorAll<HTMLButtonElement>("[data-view]").forEach((b) =>
+    b.classList.toggle("active", (b.dataset.view === "realistic") === on),
+  );
+  document.body.dataset.view = on ? "realistic" : "technical";
+  await viewer.setRealistic(on);
+  panels?.renderMaterials();
+}
+
 async function start() {
   // Una sola instancia del visor. Si Vite recarga este módulo (HMR),
   // se libera la anterior antes de crear otra.
   const viewer = new Viewer(ui.viewport, {
     onSelectionChange: (info, count) => {
       hasSelection = count > 0;
+      panels?.renderMaterials();
       renderProperties(ui.props, info, count, {
         fit: () => void run(viewer, () => viewer.fitSelection()),
         isolate: () => void run(viewer, () => viewer.isolateSelected()),
@@ -165,6 +189,7 @@ async function start() {
       await viewer.closeModel();
       ui.modelName.textContent = "";
       document.body.dataset.modelState = "closed";
+      panels?.renderMaterials();
     }),
   );
   on(ui.fit, "click", () => run(viewer, () => viewer.fitAll()));
@@ -213,6 +238,19 @@ async function start() {
     else if (k === "i" && hasSelection) void run(viewer, () => viewer.isolateSelected());
     else if (k === "r") void run(viewer, () => viewer.showAll());
   });
+
+  // Vista técnica / realista y pestañas del panel
+  panels = new RealismPanels(viewer, $("materials"), $("env"), (m, k = "info") => showToast(m, k), (on) => setRealistic(viewer, on));
+  on(ui.viewSeg, "click", (e) => {
+    const b = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-view]");
+    if (b) void run(viewer, () => setRealistic(viewer, b.dataset.view === "realistic"));
+  });
+  on(ui.panel, "click", (e) => {
+    const b = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-tab]");
+    if (b?.dataset.tab) showTab(b.dataset.tab);
+  });
+  document.body.dataset.view = "technical";
+  showTab("info");
 
   setupDesktop(viewer);
   renderProperties(ui.props, null, 0);
