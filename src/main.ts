@@ -3,6 +3,7 @@ import { Viewer, UserError, type VisibilityState } from "./viewer/Viewer";
 import type { NavMode } from "./viewer/Navigator";
 import { renderProperties } from "./ui/propertiesPanel";
 import { RealismPanels } from "./ui/realismPanels";
+import { ContextMenu } from "./ui/contextMenu";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -252,6 +253,16 @@ async function start() {
   document.body.dataset.view = "technical";
   showTab("info");
 
+  // Botón derecho sobre un elemento: materiales por instancia / tipo / material IFC y acciones rápidas.
+  const ctxMenu = new ContextMenu(viewer, {
+    setRealistic: (on) => setRealistic(viewer, on),
+    notify: (m, k = "info") => showToast(m, k),
+    editMaterial: (name) => {
+      showTab("materials");
+      panels?.focusMaterial(name);
+    },
+  });
+
   setupDesktop(viewer);
   renderProperties(ui.props, null, 0);
   refreshButtons(viewer);
@@ -261,6 +272,7 @@ async function start() {
 
   const teardown = () => {
     ac.abort();
+    ctxMenu.dispose();
     void viewer.dispose();
   };
   window.addEventListener("pagehide", teardown, { once: true });

@@ -502,7 +502,7 @@ try {
     const t0 = Date.now();
     await page.click('[data-act="auto"]');
     await waitFor(() => document.body.dataset.view === "realistic");
-    const presets = await page.$$eval(".mat", (els) => Object.fromEntries(els.map((e) => [e.dataset.name, e.querySelector('select[data-role="preset"]').value])));
+    const presets = await page.$$eval(".mat", (els) => Object.fromEntries(els.map((e) => [e.dataset.name, e.dataset.preset])));
     const concreteName = groups.find((g) => /concrete/i.test(g.name))?.name;
     const steelName = groups.find((g) => /steel/i.test(g.name))?.name;
     check("Asignación automática por nombre (hormigón → Hormigón, acero → Acero)", presets[concreteName] === "concrete" && presets[steelName] === "steel", JSON.stringify(presets));
@@ -531,7 +531,9 @@ try {
 
     // Cambiar a ladrillo y editar en vivo
     const sel = (n) => `.mat[data-name="${n.replace(/"/g, '\\"')}"]`;
-    await page.selectOption(`${sel(concreteName)} select[data-role="preset"]`, "brick");
+    // Selector de acabados propio (no un desplegable nativo, que se cerraba solo al redibujar el panel)
+    await page.click(`${sel(concreteName)} [data-act="pick"]`);
+    await page.click('.picker [data-preset="brick"]');
     await waitFor(() => Object.values(window.__viewer.appearance.debug().registry).flat().some((m) => m.map === "brick"));
     await page.click(`${sel(concreteName)} .mat-row`);
     await page.waitForSelector(`${sel(concreteName)} .editor`);
@@ -547,8 +549,8 @@ try {
     await waitFor(() => { let s = false; window.__viewer.world.scene.three.traverse((o) => { if (o.isMesh) for (const m of [].concat(o.material)) if (m.userData?.customId === "select") s = true; }); return s; });
     check("La selección se ve por encima del material", true);
     await page.waitForSelector('[data-testid="sel-box"]');
-    await page.selectOption('[data-role="sel-preset"]', "glass");
-    await page.click('[data-act="sel-apply"]');
+    await page.click('[data-act="sel-pick"]');
+    await page.click('.picker [data-preset="glass"]');
     await page.evaluate(() => window.__viewer.clearSelection());
     // Tras deseleccionar: el vidrio debe estar y NO debe quedar ningún material de selección (bug de
     // Fragments: los elementos se quedaban naranjas si el estilo se creaba con la selección activa).
@@ -570,12 +572,67 @@ try {
     check("Material por elemento (vidrio) aplicado sobre el del grupo al deseleccionar", Object.entries(used).some(([k, u]) => k.startsWith("mat:o:") && u.opacity.some((o) => o < 1)), Object.entries(used).map(([k, u]) => `${k}:${u.n}${u.maps.length ? "(" + u.maps + ")" : ""}${u.opacity.some((o) => o < 1) ? "[transp.]" : ""}`).join(" "));
     await page.screenshot({ path: join(outDir, "07-vidrio-ladrillo.png"), timeout: 240_000 });
 
+    // Menú del botón derecho: material por TIPO y por INSTANCIA
+    {
+      // Punto de la pantalla sobre un elemento cuyo tipo tiene varias instancias (se busca con el raycast de la app).
+      const target = await page.evaluate(async () => {
+        const v = window.__viewer, r = v.canvas.getBoundingClientRect();
+        for (let gy = 0.3; gy <= 0.8; gy += 0.05)
+          for (let gx = 0.2; gx <= 0.8; gx += 0.05) {
+            const x = r.left + r.width * gx, y = r.top + r.height * gy;
+            const id = await v.pickAt(x, y);
+            if (id === null) continue;
+            const c = v.appearance.elementContext(id);
+            if (c.type && c.type.localIds.length > 1 && !c.own) return { x, y, id, type: c.type.key, n: c.type.localIds.length };
+          }
+        return null;
+      });
+      if (!target) throw new Error("No se encontró en pantalla ningún elemento con tipo IFC compartido");
+      await page.mouse.move(target.x, target.y);
+      await page.mouse.down({ button: "right" });
+      await page.mouse.up({ button: "right" });
+      await page.waitForSelector(".ctx-menu:not([hidden])", { timeout: 30_000 });
+      const menuId = Number(await page.getAttribute(".ctx-menu", "data-local-id"));
+      const tabs = await page.$$eval(".ctx-tab", (els) => els.map((e) => e.textContent.replace(/\s+/g, " ").trim()));
+      check("Clic derecho sobre un elemento abre el menú de materiales (instancia / tipo / material IFC)", menuId === target.id && tabs.length === 3, tabs.join(" | "));
+      await page.click('.ctx-tab[data-scope="type"]');
+      await page.click('.ctx-menu [data-preset="wood"]');
+      await waitFor((k) => window.__viewer.appearance.profile.byType[k]?.preset === "wood" && Object.values(window.__viewer.appearance.debug().registry).flat().some((m) => m.map === "wood"), target.type);
+      await waitFor(() => {
+        let ok = false;
+        window.__viewer.world.scene.three.traverse((o) => {
+          if (!o.isMesh || !Array.isArray(o.material)) return;
+          for (const gr of o.geometry.groups) { const m = o.material[gr.materialIndex]; if (m && gr.count > 0 && String(m.userData?.customId).startsWith("mat:t:") && m.map?.name === "wood") ok = true; }
+        });
+        return ok;
+      });
+      const stillOpen = await page.isVisible(".ctx-menu");
+      check("Material por tipo: todas las instancias del tipo con Madera (el menú sigue abierto)", stillOpen, `${target.type} · ${target.n} elementos`);
+      await page.click('.ctx-tab[data-scope="instance"]');
+      await page.click('.ctx-menu [data-preset="paint"]');
+      await waitFor((id) => window.__viewer.appearance.elementContext(id).own?.preset === "paint" && /por instancia/.test(document.querySelector(".ctx-sub")?.textContent ?? ""), target.id);
+      const ctxAfter = await page.evaluate((id) => { const c = window.__viewer.appearance.elementContext(id); return { own: c.own?.preset, type: c.typeCfg?.preset, sub: document.querySelector(".ctx-sub")?.textContent }; }, target.id);
+      const typeOthers = await page.evaluate((k) => { const a = window.__viewer.appearance; return a.types.get(k).localIds.filter((i) => a.elementContext(i).own).length; }, target.type);
+      check("Material por instancia: solo ese elemento cambia y manda sobre el del tipo", ctxAfter.own === "paint" && ctxAfter.type === "wood" && typeOthers === 1 && /por instancia/.test(ctxAfter.sub), JSON.stringify(ctxAfter));
+      await page.screenshot({ path: join(outDir, "08-menu-contextual.png"), timeout: 240_000 });
+      await page.keyboard.press("Escape");
+      check("Esc cierra el menú", await page.isHidden(".ctx-menu"));
+      // Arrastrar con el derecho desplaza la vista y NO abre el menú
+      await page.mouse.move(target.x, target.y);
+      await page.mouse.down({ button: "right" });
+      await page.mouse.move(target.x + 40, target.y + 10, { steps: 4 });
+      await page.mouse.up({ button: "right" });
+      await page.waitForTimeout(300);
+      check("Arrastrar con el botón derecho no abre el menú", await page.isHidden(".ctx-menu"));
+      await page.evaluate(() => window.__viewer.fitAll());
+    }
+
     // Exportar / importar perfil
     const exported = await page.evaluate(() => window.__viewer.appearance.exportProfile());
     await page.evaluate(() => window.__viewer.appearance.clearProfile());
     await page.evaluate((j) => window.__viewer.appearance.importProfile(j), exported);
     const reimported = await page.evaluate((n) => window.__viewer.appearance.configForMaterial(n), concreteName);
-    check("Exportar e importar el perfil de materiales", reimported?.preset === "brick" && JSON.parse(exported).byMaterial[concreteName]?.preset === "brick");
+    check("Exportar e importar el perfil de materiales (incluye tipos)", reimported?.preset === "brick" && JSON.parse(exported).byMaterial[concreteName]?.preset === "brick" && Object.values(JSON.parse(exported).byType ?? {}).some((c) => c.preset === "wood"));
 
     // Entorno: hora del día
     await page.click('[data-tab="env"]');

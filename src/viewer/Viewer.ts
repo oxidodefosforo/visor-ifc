@@ -284,6 +284,45 @@ export class Viewer {
     await this.highlighter.highlightByID(SELECT_STYLE, { [this.currentModelId]: new Set(ids) }, true, false);
   }
 
+  /** Elemento bajo un punto de la pantalla (coordenadas de ventana), o null. */
+  async pickAt(clientX: number, clientY: number): Promise<number | null> {
+    if (!this.currentModelId) return null;
+    const r = this.canvas.getBoundingClientRect();
+    const ndc = new THREE.Vector2(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
+    try {
+      const hit = (await this.components.get(OBC.Raycasters).get(this.world).castRay({ position: ndc })) as { localId?: number } | null;
+      return typeof hit?.localId === "number" ? hit.localId : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Oculta / aísla / encuadra elementos concretos (menú contextual). */
+  async hideLocalIds(ids: number[]) {
+    if (!this.currentModelId || !ids.length) return;
+    await this.highlighter.clear(SELECT_STYLE);
+    await this.hider.set(false, { [this.currentModelId]: new Set(ids) });
+    await this.fragments.core.update(true);
+    this.setVisibility("partial");
+  }
+
+  async isolateLocalIds(ids: number[]) {
+    if (!this.currentModelId || !ids.length) return;
+    await this.hider.isolate({ [this.currentModelId]: new Set(ids) });
+    await this.fragments.core.update(true);
+    this.setVisibility("isolated");
+  }
+
+  async fitLocalIds(ids: number[]) {
+    if (!this.currentModelId || !ids.length) return;
+    const map = { [this.currentModelId]: new Set(ids) };
+    await this.nav.fit(() => this.world.camera.fitToItems(map));
+  }
+
+  get modelId() {
+    return this.currentModelId;
+  }
+
   /** Elementos seleccionados (localIds del modelo actual). */
   selectedLocalIds(): number[] {
     const sel = this.selection();

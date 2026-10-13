@@ -9,8 +9,8 @@ import { applyConfig, configFromPreset, createPbr, guessPreset, type MatConfig }
  *
  * - Intercepta la creación de materiales de Fragments (MaterialManager.new) para usar
  *   MeshStandardMaterial (PBR) en lugar de MeshLambertMaterial.
- * - Las asignaciones se aplican como «estilos» del Highlighter de That Open
- *   (`mat:g:*` por material IFC, prioridad 1; `mat:o:*` por elemento, prioridad 2).
+ * - Las asignaciones se aplican como «estilos» del Highlighter de That Open:
+ *   `mat:g:*` por material IFC (prioridad 1), `mat:t:*` por tipo (2), `mat:o:*` por elemento (3).
  *   La selección (prioridad máxima) siempre se ve encima y, al deseleccionar,
  *   el Highlighter vuelve a pintar el material asignado.
  * - Solo se aplican en Vista realista; en Vista técnica se ven los colores del IFC.
@@ -18,9 +18,13 @@ import { applyConfig, configFromPreset, createPbr, guessPreset, type MatConfig }
  *   puede exportar/importar como JSON para reutilizarlo entre proyectos.
  */
 export type MaterialGroup = { name: string; localIds: number[]; color: string | null };
+/** Tipo IFC (p. ej. IfcBeamType «M_Concrete-Rectangular Beam:400 x 800mm»). */
+export type TypeGroup = { key: string; name: string; ifcClass: string; localIds: number[] };
 export type Profile = {
   version: 1;
   byMaterial: Record<string, MatConfig>;
+  /** Por tipo: clave «CLASE|Nombre del tipo» (reutilizable entre proyectos, como los materiales). */
+  byType: Record<string, MatConfig>;
   /** Por GlobalId: sobrescribe el material IFC del elemento. */
   byElement: Record<string, MatConfig>;
   customTextures: Record<string, string>;
@@ -36,13 +40,16 @@ function hash(s: string) {
 }
 
 function emptyProfile(): Profile {
-  return { version: 1, byMaterial: {}, byElement: {}, customTextures: {} };
+  return { version: 1, byMaterial: {}, byType: {}, byElement: {}, customTextures: {} };
 }
 
 export class Appearance {
   realistic = false;
   profile: Profile = this.load();
   groups: MaterialGroup[] = [];
+  types = new Map<string, TypeGroup>();
+  private typeOf = new Map<number, string>();
+  private groupOf = new Map<number, string>();
   private modelId: string | null = null;
   /** customId del estilo → configuración vigente. */
   private styleConfig = new Map<string, MatConfig>();
@@ -92,6 +99,9 @@ export class Appearance {
   /** Agrupa los elementos con geometría por material IFC (nombre). */
   async analyze(model: FRAGS.FragmentsModel) {
     this.modelId = model.modelId;
+    this.types.clear();
+    this.typeOf.clear();
+    this.groupOf.clear();
     const items = await model.getItemsWithGeometry();
     const ids = await Promise.all(items.map((i) => i.getLocalId()));
     const localIds = ids.filter((x): x is number => typeof x === "number");
@@ -104,7 +114,9 @@ export class Appearance {
         attributes: ["Name"],
         relations: {
           HasAssociations: { attributes: true, relations: true },
-          IsDefinedBy: { attributes: false, relations: true }, // para llegar al tipo
+          IsDefinedBy: { attributes: true, relations: true }, // tipo (nombre y clase) y su material
+          HasProperties: { attributes: false, relations: false },
+          Quantities: { attributes: false, relations: false },
           HasPropertySets: { attributes: false, relations: false },
           ObjectTypeOf: { attributes: false, relations: false },
           RepresentationMaps: { attributes: false, relations: false },
@@ -118,6 +130,15 @@ export class Appearance {
         let list = groups.get(name);
         if (!list) groups.set(name, (list = []));
         list.push(id);
+        this.groupOf.set(id, name);
+        const t = typeInfo(data[k]);
+        if (t) {
+          const key = `${t.cls}|${t.name}`;
+          let tg = this.types.get(key);
+          if (!tg) this.types.set(key, (tg = { key, name: t.name, ifcClass: t.cls, localIds: [] }));
+          tg.localIds.push(id);
+          this.typeOf.set(id, key);
+        }
       });
     }
     const guids = await model.getGuidsByLocalIds(localIds);
@@ -140,6 +161,9 @@ export class Appearance {
   reset() {
     this.modelId = null;
     this.groups = [];
+    this.types.clear();
+    this.typeOf.clear();
+    this.groupOf.clear();
     this.guidByLocal.clear();
     this.localByGuid.clear();
     for (const id of [...this.styleConfig.keys()]) this.highlighter.styles.delete(id);
@@ -179,6 +203,36 @@ export class Appearance {
     await this.applyAll();
   }
 
+  /** Configura un tipo IFC (todas sus instancias). */
+  async setTypeConfig(typeKey: string, cfg: MatConfig | null) {
+    if (cfg) this.profile.byType[typeKey] = cfg;
+    else delete this.profile.byType[typeKey];
+    this.save();
+    const id = `mat:t:${hash(typeKey)}`;
+    if (cfg && this.styleConfig.has(id)) {
+      this.styleConfig.set(id, cfg);
+      for (const m of this.registry.get(id) ?? []) applyConfig(m, cfg, this.profile.customTextures);
+      this.onChange?.();
+      return;
+    }
+    await this.applyAll();
+  }
+
+  /** Contexto de un elemento para el menú: su tipo, su material IFC y la configuración efectiva. */
+  elementContext(localId: number) {
+    const typeKey = this.typeOf.get(localId) ?? null;
+    const type = typeKey ? (this.types.get(typeKey) ?? null) : null;
+    const group = this.groupOf.get(localId) ?? null;
+    const guid = this.guidByLocal.get(localId) ?? null;
+    return {
+      type,
+      group: group ? (this.groups.find((g) => g.name === group) ?? null) : null,
+      own: guid ? (this.profile.byElement[guid] ?? null) : null,
+      typeCfg: typeKey ? (this.profile.byType[typeKey] ?? null) : null,
+      groupCfg: group ? (this.profile.byMaterial[group] ?? null) : null,
+    };
+  }
+
   elementConfig(localId: number): MatConfig | null {
     const g = this.guidByLocal.get(localId);
     return g ? (this.profile.byElement[g] ?? null) : null;
@@ -213,11 +267,15 @@ export class Appearance {
         const cfg = this.profile.byMaterial[g.name];
         if (cfg) desired.set(`mat:g:${hash(g.name)}`, { cfg, priority: 1, ids: g.localIds });
       }
+      for (const t of this.types.values()) {
+        const cfg = this.profile.byType[t.key];
+        if (cfg) desired.set(`mat:t:${hash(t.key)}`, { cfg, priority: 2, ids: t.localIds });
+      }
       for (const [guid, cfg] of Object.entries(this.profile.byElement)) {
         const id = this.localByGuid.get(guid);
         if (id === undefined) continue;
         const key = `mat:o:${hash(JSON.stringify(cfg))}`;
-        const entry = desired.get(key) ?? { cfg, priority: 2, ids: [] };
+        const entry = desired.get(key) ?? { cfg, priority: 3, ids: [] };
         entry.ids.push(id);
         desired.set(key, entry);
       }
@@ -275,6 +333,7 @@ export class Appearance {
     const p = JSON.parse(json) as Partial<Profile>;
     if (!p || typeof p !== "object" || !p.byMaterial) throw new Error("El archivo no es un perfil de materiales del Visor IFC.");
     this.profile.byMaterial = { ...this.profile.byMaterial, ...p.byMaterial };
+    this.profile.byType = { ...this.profile.byType, ...(p.byType ?? {}) };
     this.profile.customTextures = { ...this.profile.customTextures, ...(p.customTextures ?? {}) };
     this.save();
     await this.applyAll();
@@ -343,4 +402,17 @@ function firstMaterialName(item: FRAGS.ItemData | undefined): string | null {
     return null;
   };
   return visit(item, 0);
+}
+
+/** Tipo IFC del elemento (IsDefinedBy aplanado contiene el objeto tipo). */
+function typeInfo(item: FRAGS.ItemData | undefined): { cls: string; name: string } | null {
+  const defs = item?.IsDefinedBy;
+  if (!Array.isArray(defs)) return null;
+  for (const d of defs) {
+    const cls = String((d._category as FRAGS.ItemAttribute | undefined)?.value ?? "").toUpperCase();
+    if (!/TYPE$|STYLE$/.test(cls)) continue;
+    const name = (d.Name as FRAGS.ItemAttribute | undefined)?.value;
+    return { cls, name: name ? String(name) : "(sin nombre)" };
+  }
+  return null;
 }

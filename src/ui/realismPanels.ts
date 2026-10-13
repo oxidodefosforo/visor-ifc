@@ -1,6 +1,7 @@
 import type { Viewer } from "../viewer/Viewer";
-import { PRESETS, configFromPreset, presetByKey, type MatConfig } from "../render/materials";
-import { TEXTURE_KEYS, textureThumb, imageFileToDataUrl, type TextureKey } from "../render/textures";
+import { configFromPreset, presetByKey, type MatConfig } from "../render/materials";
+import { TEXTURE_KEYS, imageFileToDataUrl, type TextureKey } from "../render/textures";
+import { Popover, esc, presetGridHtml, swatch } from "./swatch";
 
 /**
  * Pestañas «Materiales» y «Entorno» del panel derecho.
@@ -8,44 +9,11 @@ import { TEXTURE_KEYS, textureThumb, imageFileToDataUrl, type TextureKey } from 
  * material, editor (color, rugosidad, metal, opacidad, escala, textura o imagen propia),
  * asignación a la selección, auto-asignación y perfil exportable.
  */
-const esc = (s: string) =>
-  s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
-
 const TEX_NAMES: Record<TextureKey, string> = {
   concrete: "Hormigón", formwork: "Encofrado", brick: "Ladrillo", block: "Bloque", plaster: "Enlucido",
   wood: "Madera", parquet: "Parquet", tiles: "Cerámico", stone: "Piedra", brushed: "Metal cepillado",
   asphalt: "Asfalto", grass: "Césped", gravel: "Grava",
 };
-
-const thumbs = new Map<string, string>();
-function thumb(key: TextureKey) {
-  let t = thumbs.get(key);
-  if (!t) thumbs.set(key, (t = textureThumb(key, 48)));
-  return t;
-}
-
-function swatch(cfg: MatConfig | null, customTextures: Record<string, string>) {
-  if (!cfg) return `<span class="sw sw-ifc" title="Color del IFC"></span>`;
-  const tex = cfg.texture;
-  const img = tex ? (tex.startsWith("custom:") ? customTextures[tex.slice(7)] : thumb(tex as TextureKey)) : null;
-  const bg = img ? `background-image:url(${img});background-size:cover;` : "";
-  return `<span class="sw" style="${bg}background-color:${esc(cfg.color)};${img ? "background-blend-mode:multiply;" : ""}${cfg.opacity < 1 ? "opacity:.6;" : ""}"></span>`;
-}
-
-function presetOptions(selected: string | null, includeIfc: boolean) {
-  const groups = [...new Set(PRESETS.map((p) => p.group))];
-  return (
-    (includeIfc ? `<option value="" ${!selected ? "selected" : ""}>— Color del IFC —</option>` : "") +
-    groups
-      .map(
-        (g) =>
-          `<optgroup label="${esc(g)}">${PRESETS.filter((p) => p.group === g)
-            .map((p) => `<option value="${p.preset}" ${p.preset === selected ? "selected" : ""}>${esc(p.name)}</option>`)
-            .join("")}</optgroup>`,
-      )
-      .join("")
-  );
-}
 
 export class RealismPanels {
   private expanded: string | null = null;
@@ -70,9 +38,23 @@ export class RealismPanels {
   // ---------------- Materiales ----------------
 
   /** Refresca la lista (no interrumpe si el usuario está arrastrando un control). */
+  private pendingRender = false;
+
   renderMaterials() {
-    const active = document.activeElement as HTMLInputElement | null;
-    if (active && this.matEl.contains(active) && active.type === "range") return;
+    // Nunca redibujar con un desplegable o deslizador del panel en uso: destruirlo cierra la lista
+    // nativa del sistema («la ventana desaparece»). Se aplaza hasta que pierda el foco.
+    const active = document.activeElement as HTMLElement | null;
+    if (active && this.matEl.contains(active) && (active.tagName === "SELECT" || (active as HTMLInputElement).type === "range" || (active as HTMLInputElement).type === "color")) {
+      if (!this.pendingRender) {
+        this.pendingRender = true;
+        active.addEventListener("blur", () => {
+          this.pendingRender = false;
+          // tras el «change», para no pisar la selección que acaba de hacer el usuario
+          setTimeout(() => this.renderMaterials(), 0);
+        }, { once: true });
+      }
+      return;
+    }
     const a = this.viewer.appearance;
     const tex = a.profile.customTextures;
     const sel = this.viewer.selectedLocalIds();
@@ -90,8 +72,7 @@ export class RealismPanels {
       ? `<div class="sel-box" data-testid="sel-box">
           <div class="sel-title">Selección: ${sel.length} elemento${sel.length > 1 ? "s" : ""}</div>
           <div class="row">
-            <select data-role="sel-preset" aria-label="Material para la selección">${presetOptions(selCfg?.preset ?? null, false)}</select>
-            <button data-act="sel-apply">Aplicar</button>
+            <button data-act="sel-pick" class="preset-btn">${swatch(selCfg, tex)}<span>${esc(selCfg ? (presetByKey(selCfg.preset)?.name ?? selCfg.preset) : "Elegir material…")}</span><span class="caret">▾</span></button>
             ${selCfg ? `<button data-act="sel-clear" title="Volver al material de su grupo">Quitar</button>` : ""}
           </div>
         </div>`
@@ -103,14 +84,14 @@ export class RealismPanels {
           .map((g) => {
             const cfg = a.configForMaterial(g.name);
             const open = this.expanded === g.name;
-            return `<div class="mat ${open ? "open" : ""}" data-name="${esc(g.name)}">
+            return `<div class="mat ${open ? "open" : ""}" data-name="${esc(g.name)}" data-preset="${cfg?.preset ?? ""}">
               <div class="mat-row" data-act="toggle" title="Editar">
                 ${swatch(cfg, tex)}
                 <span class="mat-name" title="${esc(g.name)}">${esc(g.name)}</span>
                 <span class="count">${g.localIds.length}</span>
               </div>
               <div class="mat-preset">
-                <select data-role="preset" aria-label="Material para ${esc(g.name)}">${presetOptions(cfg?.preset ?? null, true)}</select>
+                <button data-act="pick" class="preset-btn" title="Cambiar acabado de «${esc(g.name)}»"><span>${esc(cfg ? (presetByKey(cfg.preset)?.name ?? cfg.preset) : "Color del IFC")}</span><span class="caret">▾</span></button>
                 <button data-act="select-group" class="ghost small" title="Seleccionar estos elementos en el modelo">Ver</button>
               </div>
               ${open && cfg ? this.editorHtml(cfg, tex) : ""}
@@ -169,7 +150,7 @@ export class RealismPanels {
       if (act === "realistic") await this.setRealistic(true);
       else if (act === "toggle" && name) {
         this.expanded = this.expanded === name ? null : name;
-        if (this.expanded && !a.configForMaterial(name)) this.notify("Elige primero un material en el desplegable para poder editarlo.", "info");
+        if (this.expanded && !a.configForMaterial(name)) this.notify("Elige primero un acabado con el botón ▾ para poder editarlo.", "info");
         this.renderMaterials();
       } else if (act === "select-group" && name) {
         const g = a.groups.find((x) => x.name === name);
@@ -192,11 +173,12 @@ export class RealismPanels {
         const cfg = a.configForMaterial(name);
         if (cfg) await a.setMaterialConfig(name, configFromPreset(cfg.preset));
         this.renderMaterials();
-      } else if (act === "sel-apply") {
-        const key = this.matEl.querySelector<HTMLSelectElement>('[data-role="sel-preset"]')!.value;
-        await a.setElementConfig(this.viewer.selectedLocalIds(), configFromPreset(key));
-        if (!a.realistic) await this.setRealistic(true);
-        this.notify("Material asignado. Se quita la selección para que veas el resultado.", "info");
+      } else if (act === "pick" && name) {
+        this.openPicker(btn, { kind: "group", name }, a.configForMaterial(name)?.preset ?? null, "Color del IFC");
+      } else if (act === "sel-pick") {
+        const ids = this.viewer.selectedLocalIds();
+        const cur = ids.length ? a.elementConfig(ids[0]) : null;
+        this.openPicker(btn, { kind: "selection", ids }, cur?.preset ?? null, cur ? "Quitar (volver al de su grupo)" : null);
       } else if (act === "sel-clear") {
         await a.setElementConfig(this.viewer.selectedLocalIds(), null);
       }
@@ -211,11 +193,7 @@ export class RealismPanels {
     const a = this.viewer.appearance;
     const name = this.groupName(e);
     try {
-      if (t.dataset.role === "preset" && name) {
-        await a.setMaterialConfig(name, t.value ? configFromPreset(t.value) : null);
-        if (t.value && !a.realistic) await this.setRealistic(true);
-        this.renderMaterials();
-      } else if (t.dataset.role === "import-file") {
+      if (t.dataset.role === "import-file") {
         const f = (t as HTMLInputElement).files?.[0];
         (t as HTMLInputElement).value = "";
         if (f) {
@@ -274,6 +252,52 @@ export class RealismPanels {
         if (sw) sw.outerHTML = swatch(next, a.profile.customTextures);
       });
     }, 60);
+  }
+
+  /** Selector de acabados (ventana propia, sin desplegable nativo del sistema). */
+  private picker = new Popover("picker");
+  private pickTarget: { kind: "group"; name: string } | { kind: "selection"; ids: number[] } | null = null;
+
+  private openPicker(anchor: HTMLElement, target: NonNullable<typeof this.pickTarget>, current: string | null, noneLabel: string | null) {
+    this.pickTarget = target;
+    const r = anchor.getBoundingClientRect();
+    this.picker.open(presetGridHtml(current, noneLabel), r.left, r.bottom + 4);
+    if (!this.pickerWired) {
+      this.pickerWired = true;
+      this.picker.el.addEventListener("click", (e) => {
+        const b = (e.target as HTMLElement).closest<HTMLElement>("[data-preset]");
+        if (b) void this.onPick(b.dataset.preset || null);
+      });
+    }
+  }
+  private pickerWired = false;
+
+  private async onPick(key: string | null) {
+    const t = this.pickTarget;
+    this.picker.close();
+    if (!t) return;
+    const a = this.viewer.appearance;
+    const cfg = key ? configFromPreset(key) : null;
+    try {
+      if (cfg && !a.realistic) await this.setRealistic(true);
+      if (t.kind === "group") await a.setMaterialConfig(t.name, cfg);
+      else {
+        await a.setElementConfig(t.ids, cfg);
+        if (cfg) this.notify("Material asignado. Se quita la selección para que veas el resultado.", "info");
+      }
+      this.renderMaterials();
+    } catch (err) {
+      console.error(err);
+      this.notify(err instanceof Error ? err.message : String(err), "error");
+    }
+  }
+
+  /** Abre el editor de un material IFC (desde el menú contextual). */
+  focusMaterial(name: string) {
+    this.expanded = name;
+    this.renderMaterials();
+    const el = this.matEl.querySelector<HTMLElement>(`.mat[data-name="${CSS.escape(name)}"]`);
+    el?.scrollIntoView({ block: "nearest" });
   }
 
   // ---------------- Entorno ----------------
