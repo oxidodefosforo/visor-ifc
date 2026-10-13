@@ -247,6 +247,10 @@ if (ELECTRON) {
   await page.addInitScript({ content: IWER_INIT });
 }
 console.log(`IFC de prueba: ${ifcPath}\n`);
+// En CI (Windows, render por software) un fotograma de la vista realista puede tardar decenas de
+// segundos y los clics esperan a que la página responda: más margen para las acciones.
+const ACTION_TIMEOUT = process.env.GITHUB_ACTIONS ? 180_000 : 30_000;
+page.setDefaultTimeout(ACTION_TIMEOUT);
 
 const external = [];
 const consoleErrors = [];
@@ -843,6 +847,7 @@ try {
       if (!ELECTRON) await page.evaluate(() => { window.__viewer.components.enabled = false; });
       const ctx2 = await (globalThis.__vrBrowser = await chromium.launch({ headless: !HEADED, args: GL_ARGS })).newContext({ viewport: { width: 900, height: 560 } });
       const p2 = await ctx2.newPage();
+      p2.setDefaultTimeout(ACTION_TIMEOUT);
       p2.on("request", (r) => { const u = new URL(r.url()); if (!/^(blob|data):/.test(u.protocol) && !["localhost", "127.0.0.1"].includes(u.hostname)) external.push(r.url()); });
       const p2errors = [];
       p2.on("pageerror", (e) => (consoleErrors.push(e.message), p2errors.push(e.message)));
