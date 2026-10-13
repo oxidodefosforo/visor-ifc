@@ -75,6 +75,7 @@ export class ContextMenu {
   /** Abre el menú para el elemento bajo (x, y). Público para pruebas. */
   async openAt(x: number, y: number) {
     if (!this.viewer.hasModel || this.viewer.isLoading) return;
+    this.lastIgnored = "buscando elemento…";
     const id = await this.viewer.pickAt(x, y);
     if (id === null) {
       this.lastIgnored = `sin elemento en ${x.toFixed(0)},${y.toFixed(0)}`;
@@ -86,9 +87,9 @@ export class ContextMenu {
     const sel = this.viewer.selectedLocalIds();
     // Si se pulsa sobre una selección múltiple, «instancia» actúa sobre toda la selección.
     this.targets = sel.length > 1 && sel.includes(id) ? sel : [id];
-    if (!sel.includes(id)) await this.viewer.selectLocalIds([id]);
     this.header = "";
-    this.render();
+    this.render(); // primero el menú (respuesta inmediata) y después el resaltado
+    if (!sel.includes(id)) void this.viewer.selectLocalIds([id]);
     const modelId = this.viewer.modelId;
     if (modelId) {
       void this.viewer.getElementInfo(modelId, id).then((info) => {

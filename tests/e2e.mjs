@@ -673,11 +673,12 @@ try {
         return null;
       });
       if (!target) throw new Error("No se encontró en pantalla ningún elemento con tipo IFC compartido");
+      await page.evaluate(() => (window.__ctx.lastIgnored = ""));
       await page.mouse.move(target.x, target.y);
       await page.mouse.down({ button: "right" });
       await page.mouse.up({ button: "right" });
       try {
-        await page.waitForSelector(".ctx-menu:not([hidden])", { timeout: 30_000 });
+        await page.waitForSelector(".ctx-menu:not([hidden])", { timeout: ACTION_TIMEOUT });
       } catch (e) {
         const why = await page.evaluate(() => window.__ctx?.lastIgnored).catch(() => "?");
         throw new Error(`El menú contextual no se abrió (${why})`);
