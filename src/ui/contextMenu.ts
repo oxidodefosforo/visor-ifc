@@ -39,19 +39,26 @@ export class ContextMenu {
   private header = "";
   private at = { x: 0, y: 0 };
   private busy = false;
+  /** Diagnóstico (pruebas): por qué no se abrió el último clic derecho. */
+  lastIgnored = "";
 
   constructor(private viewer: Viewer, private hooks: ContextMenuHooks) {
     const dom = viewer.canvas;
     const o = { signal: this.ac.signal };
     dom.addEventListener("pointerdown", (e) => {
-      if (e.button === 2) this.down = { x: e.clientX, y: e.clientY, t: performance.now() };
+      // e.timeStamp (momento del evento) y no performance.now(): con fotogramas lentos el manejador
+      // puede ejecutarse tarde y un clic corto parecía una pulsación larga (fallo visto en CI Windows).
+      if (e.button === 2) this.down = { x: e.clientX, y: e.clientY, t: e.timeStamp };
     }, o);
     // pointerup en la ventana: camera-controls (Órbita) captura el puntero.
     window.addEventListener("pointerup", (e) => {
       const d = this.down;
       this.down = null;
       if (e.button !== 2 || !d) return;
-      if (Math.hypot(e.clientX - d.x, e.clientY - d.y) > 5 || performance.now() - d.t > 800) return; // fue un arrastre
+      if (Math.hypot(e.clientX - d.x, e.clientY - d.y) > 5 || e.timeStamp - d.t > 1000) {
+        this.lastIgnored = `arrastre: ${Math.hypot(e.clientX - d.x, e.clientY - d.y).toFixed(1)} px, ${(e.timeStamp - d.t).toFixed(0)} ms`;
+        return; // fue un arrastre
+      }
       void this.openAt(e.clientX, e.clientY);
     }, o);
     this.pop.el.addEventListener("click", (e) => void this.onClick(e));
@@ -70,6 +77,7 @@ export class ContextMenu {
     if (!this.viewer.hasModel || this.viewer.isLoading) return;
     const id = await this.viewer.pickAt(x, y);
     if (id === null) {
+      this.lastIgnored = `sin elemento en ${x.toFixed(0)},${y.toFixed(0)}`;
       this.pop.close();
       return;
     }

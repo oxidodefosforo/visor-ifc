@@ -282,6 +282,7 @@ async function start() {
   // Panel inferior «Análisis»: interferencias, IDS, comparar versiones, 4D.
   dock = new AnalysisDock(viewer, $("analysis"), ui.viewport.parentElement!, $<HTMLButtonElement>("btn-analysis"), (m, k = "info") => showToast(m, k), () => ui.modelName.textContent ?? "modelo");
   (window as unknown as { __dock?: AnalysisDock }).__dock = dock;
+  (window as unknown as { __ctx?: ContextMenu }).__ctx = ctxMenu;
   planView = new PlanView(viewer, (m, k = "info") => showToast(m, k), () => ui.modelName.textContent ?? "modelo");
   (window as unknown as { __plan?: PlanView }).__plan = planView;
   on($("btn-plan"), "click", () => void planView?.open().catch((err) => showToast("No se pudo generar la planta.", "error", String(err))));

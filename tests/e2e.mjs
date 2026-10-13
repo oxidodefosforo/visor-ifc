@@ -662,7 +662,12 @@ try {
       await page.mouse.move(target.x, target.y);
       await page.mouse.down({ button: "right" });
       await page.mouse.up({ button: "right" });
-      await page.waitForSelector(".ctx-menu:not([hidden])", { timeout: 30_000 });
+      try {
+        await page.waitForSelector(".ctx-menu:not([hidden])", { timeout: 30_000 });
+      } catch (e) {
+        const why = await page.evaluate(() => window.__ctx?.lastIgnored).catch(() => "?");
+        throw new Error(`El menú contextual no se abrió (${why})`);
+      }
       const menuId = Number(await page.getAttribute(".ctx-menu", "data-local-id"));
       const tabs = await page.$$eval(".ctx-tab", (els) => els.map((e) => e.textContent.replace(/\s+/g, " ").trim()));
       check("Clic derecho sobre un elemento abre el menú de materiales (instancia / tipo / material IFC)", menuId === target.id && tabs.length === 3, tabs.join(" | "));
