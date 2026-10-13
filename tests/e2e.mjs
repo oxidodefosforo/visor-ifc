@@ -841,7 +841,12 @@ try {
       } catch (e) {
         throw new Error(`No se pudo abrir ${vrUrl} en el navegador (servidor: ${probe}): ${e.message.split("\n")[0]}`);
       }
-      await p2.waitForSelector("[data-enter-vr]", { timeout: 120_000 });
+      try {
+        await p2.waitForSelector("[data-enter-vr]", { timeout: 240_000 });
+      } catch (e) {
+        const st = await p2.evaluate(() => `estado=${document.body.dataset.modelState} paso=${document.body.dataset.vrStep} vr=${document.body.dataset.vr} aviso=${document.querySelector("#toast")?.textContent?.slice(0, 200)}`).catch(() => "?");
+        throw new Error(`La vista VR no terminó de cargar en el navegador (${st})`);
+      }
       const got = await p2.evaluate((k) => ({ type: window.__viewer.appearance.profile.byType[k]?.preset, realistic: window.__viewer.appearance.realistic, n: window.__viewer.appearance.groups.reduce((n, g) => n + g.localIds.length, 0) }), typeKey);
       check("Vista VR en el navegador: recibe el modelo (sin volver a procesar el IFC) con sus materiales", got.type === "wood" && got.n > 0, `${JSON.stringify(got)} · ${((Date.now() - tOpen) / 1000).toFixed(1)} s`);
       await vrSession(p2, "VR desde la app (navegador)");

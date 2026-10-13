@@ -148,21 +148,30 @@ export class VrUi {
   }
 
   async openSession(token: string, onLoaded: (name: string) => void) {
-    this.show(`<h3>Cargando la vista VR…</h3><p class="muted">Recibiendo el modelo desde el Visor IFC.</p>`);
+    this.show(`<h3>Cargando la vista VR…</h3><p class="muted vr-step">Recibiendo el modelo desde el Visor IFC.</p>`);
+    const step = (msg: string) => {
+      document.body.dataset.vrStep = msg;
+      const el = this.card.querySelector(".vr-step");
+      if (el) el.textContent = msg;
+    };
     const base = `/vr/${encodeURIComponent(token)}`;
     const [sRes, mRes] = await Promise.all([fetch(`${base}/session.json`), fetch(`${base}/model.frag`)]);
     if (!sRes.ok || !mRes.ok) throw new Error(sRes.ok ? await mRes.text() : await sRes.text());
     const session = (await sRes.json()) as VrSession;
     const buffer = await mRes.arrayBuffer();
     const v = this.viewer;
+    step(`Abriendo el modelo (${(buffer.byteLength / 1048576).toFixed(1)} MB)…`);
     await v.loadFragments(buffer, session.name);
     onLoaded(session.name);
+    step("Aplicando materiales y entorno…");
     v.updateEnvironment(session.env);
     await v.appearance.replaceProfile(session.profile);
     document.body.dataset.vrRealistic = String(session.realistic);
     if (session.realistic) await this.setRealistic(true);
+    step("Colocando la vista…");
     if (session.hidden.length) await v.hideLocalIds(session.hidden);
     await v.setCameraPose(session.camera);
+    step("Buscando las gafas…");
     const ok = await v.vr.detect();
     this.show(`<h3>Visor IFC · VR</h3>
       <p><b>${esc(session.name)}</b> listo, con sus materiales y la vista que tenías.</p>
