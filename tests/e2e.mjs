@@ -860,7 +860,10 @@ try {
         const st = await p2.evaluate(() => `estado=${document.body.dataset.modelState} paso=${document.body.dataset.vrStep} vr=${document.body.dataset.vr} aviso=${document.querySelector("#toast")?.textContent?.slice(0, 200)}`).catch(() => "?");
         throw new Error(`La vista VR no terminó de cargar en el navegador (${st}; errores: ${p2errors.slice(0, 4).join(" | ").slice(0, 600)})`);
       }
+      const tReady = Date.now();
+      await p2.waitForFunction(() => window.__viewer.appearance.groups.length > 0, null, { timeout: 240_000, polling: 500 }).catch(() => {});
       const got = await p2.evaluate((k) => ({ type: window.__viewer.appearance.profile.byType[k]?.preset, realistic: window.__viewer.appearance.realistic, n: window.__viewer.appearance.groups.reduce((n, g) => n + g.localIds.length, 0) }), typeKey);
+      got.materialesTrasBoton = `${((Date.now() - tReady) / 1000).toFixed(1)} s`;
       check("Vista VR en el navegador: recibe el modelo (sin volver a procesar el IFC) con sus materiales", got.type === "wood" && got.n > 0, `${JSON.stringify(got)} · ${((Date.now() - tOpen) / 1000).toFixed(1)} s`);
       await vrSession(p2, "VR desde la app (navegador)");
       await ctx2.close();

@@ -271,8 +271,9 @@ export class Viewer {
       step("encuadre");
       await this.fitAll();
       this.setVisibility("all");
-      step("materiales");
-      await this.appearance.analyze(model).catch((e) => console.warn("No se pudieron agrupar los materiales", e));
+      // Agrupar por material/tipo en segundo plano (igual que loadIfc): al terminar aplica el perfil
+      // si la vista realista está activa. No se espera: en CI Windows llegó a tardar minutos.
+      void this.appearance.analyze(model).catch((e) => console.warn("No se pudieron agrupar los materiales", e));
       return { modelId: model.modelId, name };
     } catch (err) {
       throw toUserError(err);
