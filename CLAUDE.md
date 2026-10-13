@@ -325,6 +325,7 @@ en VR. Interferencias: 673 en ~3 s, muestra de 25 confirmada con la geometría d
 1 nuevo, 1 eliminado, 2 modificados (marca B1→B1-REV2 y pilar +0,500 m en X). 4D: ocultos/en ejecución a mitad de
 obra coinciden con la programación; CSV ida y vuelta. Planta 2D: PDF A3 (qpdf sin errores, revisado a la vista)
 y DXF (ezdxf sin errores: 13.5k LINE, 69 POLYLINE, capas por clase). Excel validado con openpyxl.
+CI windows-latest: 93/93 y Release v0.5.0 publicada (SHA-512 del .exe comprobado contra latest.yml).
 
 **No probado:** VR con unas Quest reales (solo emulador IWER de Meta: sesión, mandos, teletransporte, salida;
 y el paso app→Chrome con Electron real + servidor local); rendimiento VR con GPU real; IDS con facetas de
