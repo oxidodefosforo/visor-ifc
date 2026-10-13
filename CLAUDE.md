@@ -264,6 +264,13 @@ es lentísimo (capturas de >30 s): no usarlo.
   nivel [elev−0,3; siguiente−0,01]; cortados (grueso + relleno por cadenas cerradas), por encima a media altura del
   elemento (discontinuo), por debajo (fino). Escala A3 normalizada (1:20…1:5000). Planta: X = x, Y = −z del visor.
 - **Excel:** .xlsx real (OOXML mínimo con fflate), validado con openpyxl. En Electron la descarga abre «Guardar como».
+- **Carrera de Fragments 3.4.8 con fotogramas lentos (CI Windows):** el worker puede mandar mallas con un índice de
+  resaltado cuya definición aún no llegó → `processHighlight` lanzaba «Cannot destructure property
+  'preserveOriginalMaterial'». Viewer envuelve `MaterialManager.processHighlight`: ese tramo usa el material base
+  y se pide otra actualización. Los estilos de análisis se vacían (`highlighter.clear`) en lugar de borrarse.
+- **CI:** la e2e tiene vigilante (45 min, informa de la última comprobación), acciones con 180 s de margen en
+  Actions (un fotograma realista con SwiftShader en Windows tarda segundos) y el render de la página principal se
+  pausa mientras el segundo navegador prueba la vista VR.
 
 ## Publicar una versión nueva
 

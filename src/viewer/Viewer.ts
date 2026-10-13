@@ -114,6 +114,23 @@ export class Viewer {
       this.world.scene.three.add(model.object);
       this.fragments.core.update(true);
     });
+    // Fragments 3.4.8: con fotogramas muy lentos (CI Windows, render por software) el worker puede
+    // mandar mallas con un índice de resaltado cuya definición aún no ha llegado al hilo principal y
+    // MaterialManager.processHighlight lanza «Cannot destructure property 'preserveOriginalMaterial'».
+    // Se dibuja ese tramo con el material base y se pide otra actualización (que ya trae la definición).
+    const mm = this.fragments.core.models.materials as unknown as {
+      processHighlight: (localMap: Map<number, number>, highlightIndex: number, defs: unknown[], ...rest: unknown[]) => void;
+    };
+    const processHighlight = mm.processHighlight.bind(mm);
+    mm.processHighlight = (localMap, highlightIndex, defs, ...rest) => {
+      if (defs[highlightIndex] === undefined) {
+        if (!localMap.has(highlightIndex)) localMap.set(highlightIndex, 0);
+        this.refreshTilesSoon();
+        return;
+      }
+      processHighlight(localMap, highlightIndex, defs, ...rest);
+    };
+
     // Reduce el parpadeo (z-fighting) entre caras coplanares, como indica la doc oficial.
     // Excepción verificada en pruebas: el material de selección debe ir SIEMPRE delante;
     // con un desfase aleatorio, a veces quedaba detrás de una cara coplanar y el
