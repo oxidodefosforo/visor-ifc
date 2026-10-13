@@ -227,8 +227,9 @@ export class CompareTab implements AnalysisTab {
     const auxIds = auxRows.map((x) => x.sig.localId);
     await v.showOnlyAux(this.aux, auxIds);
     if (auxIds.length) {
+      // Un estilo por color (no se recrean estilos: ver Viewer.paint)
       const kind = this.otherIsNewer ? "added" : "removed";
-      await v.paintAux(this.aux, "cmp-aux", COLOR[kind], auxIds);
+      await v.paintAux(this.aux, `cmp-aux-${kind}`, COLOR[kind], auxIds);
     }
   }
 

@@ -886,6 +886,9 @@ try {
       return { path, buf: readFileSync(path), suggested: d.suggestedFilename() };
     };
     await page.setViewportSize({ width: 1400, height: 850 });
+    // Vista técnica: en CI (SwiftShader en Windows) cada fotograma realista tarda segundos.
+    await page.click('[data-view="technical"]');
+    await wait(() => document.body.dataset.view === "technical" && !window.__viewer.world.scene.three.environment, null, 60_000);
     await page.click("#btn-analysis");
     await wait(() => window.__dock?.tabs[0].active);
     await page.waitForSelector('.clash-tab [data-act="run"]', { timeout: 120_000 });

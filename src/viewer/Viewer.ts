@@ -505,11 +505,11 @@ export class Viewer {
     // Mismo cuidado que Appearance.applyAll: crear estilos con selección activa deja restos naranjas.
     if (!OBC.ModelIdMapUtils.isEmpty(this.highlighter.selection[SELECT_STYLE] ?? {})) await this.highlighter.clear(SELECT_STYLE);
     const wanted = new Set(groups.filter((g) => g.ids.length).map((g) => `an:${g.name}`));
-    for (const id of [...this.paintStyles]) {
-      if (!wanted.has(id)) {
-        this.highlighter.styles.delete(id);
-        this.paintStyles.delete(id);
-      }
+    // Los estilos que ya no hacen falta se VACÍAN, no se borran: borrar la definición mientras Fragments
+    // actualiza mallas dejaba índices sin definición («Cannot destructure property 'preserveOriginalMaterial'»,
+    // visto en CI Windows). Cada nombre tiene un color fijo, así que no hace falta recrearlos.
+    for (const id of this.paintStyles) {
+      if (!wanted.has(id) && !OBC.ModelIdMapUtils.isEmpty(this.highlighter.selection[id] ?? {})) await this.highlighter.clear(id);
     }
     for (const g of groups) {
       if (!g.ids.length) continue;
