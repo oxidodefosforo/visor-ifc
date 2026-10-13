@@ -5,6 +5,8 @@ import { renderProperties } from "./ui/propertiesPanel";
 import { RealismPanels } from "./ui/realismPanels";
 import { ContextMenu } from "./ui/contextMenu";
 import { VrUi } from "./ui/vrUi";
+import { AnalysisDock } from "./ui/analysis/dock";
+import { PlanView } from "./ui/planView";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -53,7 +55,12 @@ function refreshButtons(viewer: Viewer) {
   ui.viewSeg.querySelectorAll("button").forEach((b) => (b.disabled = !model || busy));
   if (!model) ui.navHelp.hidden = true;
   vrUi?.refresh(model, busy);
+  $<HTMLButtonElement>("btn-analysis").disabled = !model || busy;
+  $<HTMLButtonElement>("btn-plan").disabled = !model || busy;
 }
+
+let dock: AnalysisDock | null = null;
+let planView: PlanView | null = null;
 
 let vrUi: VrUi | null = null;
 
@@ -113,6 +120,7 @@ async function openFile(viewer: Viewer, file: File) {
     showToast(`Modelo cargado en ${secs} s.`, "info");
     document.body.dataset.modelState = "loaded";
     panels?.renderMaterials();
+    void dock?.modelLoaded();
   } catch (err) {
     console.error(err);
     const e = err instanceof UserError ? err : new UserError("No se pudo cargar el modelo.", String(err));
@@ -164,6 +172,10 @@ async function start() {
       ui.speedVal.textContent = `${s.speedMultiplier}×`;
       $("help-left").textContent = s.mode === "fly" ? "Mirar alrededor" : "Orbitar alrededor del modelo";
       document.body.dataset.navMode = s.mode;
+    },
+    onModelClosing: () => {
+      dock?.reset();
+      planView?.reset();
     },
     onVisibilityChange: (state) => {
       setBadge(state);
@@ -247,11 +259,11 @@ async function start() {
   // Vista técnica / realista y pestañas del panel
   panels = new RealismPanels(viewer, $("materials"), $("env"), (m, k = "info") => showToast(m, k), (on) => setRealistic(viewer, on));
   on(ui.viewSeg, "click", (e) => {
-    const b = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-view]");
+    const b = (e.target as HTMLElement).closest<HTMLButtonElement>("button[data-view]");
     if (b) void run(viewer, () => setRealistic(viewer, b.dataset.view === "realistic"));
   });
   on(ui.panel, "click", (e) => {
-    const b = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-tab]");
+    const b = (e.target as HTMLElement).closest<HTMLButtonElement>("button[data-tab]");
     if (b?.dataset.tab) showTab(b.dataset.tab);
   });
   document.body.dataset.view = "technical";
@@ -267,6 +279,13 @@ async function start() {
     },
   });
 
+  // Panel inferior «Análisis»: interferencias, IDS, comparar versiones, 4D.
+  dock = new AnalysisDock(viewer, $("analysis"), ui.viewport.parentElement!, $<HTMLButtonElement>("btn-analysis"), (m, k = "info") => showToast(m, k), () => ui.modelName.textContent ?? "modelo");
+  (window as unknown as { __dock?: AnalysisDock }).__dock = dock;
+  planView = new PlanView(viewer, (m, k = "info") => showToast(m, k), () => ui.modelName.textContent ?? "modelo");
+  (window as unknown as { __plan?: PlanView }).__plan = planView;
+  on($("btn-plan"), "click", () => void planView?.open().catch((err) => showToast("No se pudo generar la planta.", "error", String(err))));
+
   // Gafas VR (WebXR). En la app de escritorio abre la vista en Chrome/Edge.
   vrUi = new VrUi(viewer, $<HTMLButtonElement>("btn-vr"), $("modal"), $("modal-card"), (m, k = "info") => showToast(m, k), (on) => setRealistic(viewer, on));
   const vrToken = VrUi.token();
@@ -278,6 +297,7 @@ async function start() {
         document.body.dataset.modelState = "loaded";
         refreshButtons(viewer);
         panels?.renderMaterials();
+        void dock?.modelLoaded();
       })
       .catch((err) => {
         console.error(err);

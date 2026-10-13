@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- IDS de ejemplo para el modelo de prueba school_str.ifc (exportado de Revit en español).
+     Lo usa la prueba e2e: los resultados se contrastan con web-ifc leyendo el IFC original. -->
+<ids xmlns="http://standards.buildingsmart.org/IDS" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://standards.buildingsmart.org/IDS http://standards.buildingsmart.org/IDS/1.0/ids.xsd">
+  <info>
+    <title>Requisitos de información — estructura (ejemplo)</title>
+    <version>1.0</version>
+    <date>2026-10-13</date>
+    <purpose>Coordinación estructural</purpose>
+  </info>
+  <specifications>
+    <specification name="Vigas con marca" ifcVersion="IFC2X3 IFC4" description="Toda viga debe tener la marca de despiece (Identidad · Marca).">
+      <applicability minOccurs="0" maxOccurs="unbounded">
+        <entity>
+          <name><simpleValue>IFCBEAM</simpleValue></name>
+        </entity>
+      </applicability>
+      <requirements>
+        <property cardinality="required">
+          <propertySet><simpleValue>Identidad</simpleValue></propertySet>
+          <baseName><simpleValue>Marca</simpleValue></baseName>
+        </property>
+      </requirements>
+    </specification>
+    <specification name="Losas con espesor" ifcVersion="IFC2X3 IFC4" description="Las losas deben informar el espesor (Dimensiones · Espesor).">
+      <applicability minOccurs="0" maxOccurs="unbounded">
+        <entity>
+          <name><simpleValue>IFCSLAB</simpleValue></name>
+        </entity>
+      </applicability>
+      <requirements>
+        <property cardinality="required">
+          <propertySet><simpleValue>Dimensiones</simpleValue></propertySet>
+          <baseName><simpleValue>Espesor</simpleValue></baseName>
+        </property>
+      </requirements>
+    </specification>
+    <specification name="Pilares con material" ifcVersion="IFC2X3 IFC4" description="Los pilares deben tener la propiedad de material.">
+      <applicability minOccurs="0" maxOccurs="unbounded">
+        <entity>
+          <name><simpleValue>IFCCOLUMN</simpleValue></name>
+        </entity>
+      </applicability>
+      <requirements>
+        <property cardinality="required">
+          <propertySet><simpleValue>Materiales y acabados</simpleValue></propertySet>
+          <baseName><simpleValue>Material</simpleValue></baseName>
+        </property>
+      </requirements>
+    </specification>
+  </specifications>
+</ids>

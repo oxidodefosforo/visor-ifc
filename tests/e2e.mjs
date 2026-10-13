@@ -22,6 +22,9 @@ import { readdirSync, readFileSync, writeFileSync, mkdirSync, existsSync } from 
 import { join, resolve, basename } from "node:path";
 import * as WebIFC from "web-ifc";
 import { createRequire } from "node:module";
+import * as THREE from "three";
+import { MeshBVH } from "three-mesh-bvh";
+import { makeVariant } from "./variant.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const outDir = join(root, "test-results");
@@ -143,6 +146,64 @@ const same = (panelRaw, ifcValue) => {
 const IWER_INIT =
   readFileSync(join(root, "node_modules/iwer/build/iwer.min.js"), "utf8") +
   "\n;window.__xrdev = new IWER.XRDevice(IWER.metaQuest3); window.__xrdev.installRuntime({ forceInstall: true });";
+
+// ---------- Referencia independiente para interferencias: geometría de web-ifc en Node ----------
+let wifc = null;
+async function webIfcModel() {
+  if (wifc) return wifc;
+  const api = new WebIFC.IfcAPI();
+  await api.Init();
+  const model = api.OpenModel(new Uint8Array(readFileSync(ifcPath)));
+  api.CreateIfcGuidToExpressIdMapping(model);
+  wifc = { api, model };
+  return wifc;
+}
+/** Triángulos (coordenadas IFC) de un elemento por GlobalId, triangulados por web-ifc. */
+async function webIfcTriangles(guid) {
+  const { api, model } = await webIfcModel();
+  const id = api.GetExpressIdFromGuid(model, guid);
+  const flat = api.GetFlatMesh(model, id);
+  const out = [];
+  const m = new THREE.Matrix4();
+  const v = new THREE.Vector3();
+  for (let i = 0; i < flat.geometries.size(); i++) {
+    const pg = flat.geometries.get(i);
+    m.fromArray(pg.flatTransformation);
+    const g = api.GetGeometry(model, pg.geometryExpressID);
+    const verts = api.GetVertexArray(g.GetVertexData(), g.GetVertexDataSize());
+    const idx = api.GetIndexArray(g.GetIndexData(), g.GetIndexDataSize());
+    for (const k of idx) {
+      v.set(verts[k * 6], verts[k * 6 + 1], verts[k * 6 + 2]).applyMatrix4(m);
+      out.push(v.x, v.y, v.z);
+    }
+    g.delete?.();
+  }
+  return new Float32Array(out);
+}
+async function webIfcIntersect(guidA, guidB) {
+  const geo = (t) => { const g = new THREE.BufferGeometry(); g.setAttribute("position", new THREE.BufferAttribute(t, 3)); return g; };
+  const a = geo(await webIfcTriangles(guidA)), b = geo(await webIfcTriangles(guidB));
+  return new MeshBVH(a).intersectsGeometry(b, new THREE.Matrix4());
+}
+/** Recuento de elementos de una clase que tienen (o no) una propiedad, leído con web-ifc. */
+async function webIfcPropCount(type, psetName, propName) {
+  const { api, model } = await webIfcModel();
+  const val = (x) => (x && typeof x === "object" && "value" in x ? x.value : x);
+  const ids = api.GetLineIDsWithType(model, type);
+  const all = new Set();
+  for (let i = 0; i < ids.size(); i++) all.add(ids.get(i));
+  const withProp = new Set();
+  const rels = api.GetLineIDsWithType(model, WebIFC.IFCRELDEFINESBYPROPERTIES);
+  for (let i = 0; i < rels.size(); i++) {
+    const rel = api.GetLine(model, rels.get(i));
+    const objs = rel.RelatedObjects.map(val).filter((o) => all.has(o));
+    if (!objs.length) continue;
+    const def = api.GetLine(model, val(rel.RelatingPropertyDefinition));
+    if (val(def.Name) !== psetName || !def.HasProperties) continue;
+    if (def.HasProperties.some((h) => val(api.GetLine(model, val(h)).Name) === propName)) objs.forEach((o) => withProp.add(o));
+  }
+  return { total: all.size, pass: withProp.size, fail: all.size - withProp.size };
+}
 
 // ---------- Servidor / aplicación ----------
 let server, url, browser, page, electronApp;
@@ -514,6 +575,8 @@ try {
     const concreteName = groups.find((g) => /concrete/i.test(g.name))?.name;
     const steelName = groups.find((g) => /steel/i.test(g.name))?.name;
     check("Asignación automática por nombre (hormigón → Hormigón, acero → Acero)", presets[concreteName] === "concrete" && presets[steelName] === "steel", JSON.stringify(presets));
+    // El cielo y el mapa de entorno se generan con un pequeño retardo (Environment.scheduleEnvMap)
+    await page.waitForFunction(() => !!window.__viewer.world.scene.three.environment, null, { timeout: 30_000 }).catch(() => {});
     const env = await page.evaluate(() => { const v = window.__viewer, sc = v.world.scene.three, r = v.world.renderer.three; return { env: !!sc.environment, bg: !!sc.background?.isCubeTexture, aces: r.toneMapping === 4, shadows: r.shadowMap.enabled, sun: !!sc.getObjectByName("visor-sun") }; });
     check("Vista realista: cielo, iluminación de entorno, sol con sombras y ACES", env.env && env.bg && env.aces && env.shadows && env.sun, `${JSON.stringify(env)} · ${((Date.now() - t0) / 1000).toFixed(1)} s`);
     await waitFor((name) => Object.keys(window.__viewer.appearance.debug().registry).length > 0, null);
@@ -777,6 +840,142 @@ try {
     await globalThis.__vrBrowser?.close();
     await page.evaluate(() => window.__viewer.appearance.clearProfile());
     await page.setViewportSize({ width: 1400, height: 850 });
+  }
+
+
+  // 6d. Análisis: interferencias, IDS, comparar versiones, 4D y planta 2D
+  {
+    const wait = (fn, arg, timeout = 180_000) => page.waitForFunction(fn, arg, { timeout, polling: 300 });
+    const xlsxOk = (buf) => buf[0] === 0x50 && buf[1] === 0x4b && buf.includes(Buffer.from("xl/worksheets/sheet1.xml"));
+    // En Electron la descarga abre el diálogo «Guardar como» del sistema (no automatizable): se comprueba
+    // que el informe existe y se omite el archivo.
+    const saveDownload = async (selector, name) => {
+      if (ELECTRON) return null;
+      const [d] = await Promise.all([page.waitForEvent("download", { timeout: 60_000 }), page.click(selector)]);
+      const path = join(outDir, name);
+      await d.saveAs(path);
+      return { path, buf: readFileSync(path), suggested: d.suggestedFilename() };
+    };
+    await page.setViewportSize({ width: 1400, height: 850 });
+    await page.click("#btn-analysis");
+    await wait(() => window.__dock?.tabs[0].active);
+    await page.waitForSelector('.clash-tab [data-act="run"]', { timeout: 120_000 });
+
+    // Interferencias
+    const tc = Date.now();
+    await page.click('.clash-tab [data-act="run"]');
+    await page.waitForSelector('[data-testid="clash-count"]', { timeout: 300_000 });
+    const nClash = Number(await page.textContent('[data-testid="clash-count"]'));
+    const sample = await page.evaluate(async () => {
+      const t = window.__dock.tabs[0], idx = await t.ctx.index();
+      const n = t.clashes.length, pick = [];
+      for (let i = 0; i < Math.min(25, n); i++) pick.push(t.clashes[Math.floor((i * n) / Math.min(25, n))]);
+      return pick.map((c) => ({ a: idx.elements.get(c.a).guid, b: idx.elements.get(c.b).guid, kind: c.kind, depth: c.depth }));
+    });
+    const confirmed = [];
+    for (const c of sample) confirmed.push(c.kind === "Contenido" || (await webIfcIntersect(c.a, c.b)));
+    const unconfirmed = sample.filter((_, i) => !confirmed[i]).map((c) => `${c.a}×${c.b} ${c.kind} ${(c.depth * 1000).toFixed(0)} mm`);
+    check("Interferencias: choques encontrados y confirmados con la geometría de web-ifc", nClash > 0 && confirmed.every(Boolean), `${nClash} en ${((Date.now() - tc) / 1000).toFixed(1)} s · muestra ${confirmed.filter(Boolean).length}/${confirmed.length} confirmadas en Node${unconfirmed.length ? ` · sin confirmar: ${unconfirmed.join(", ")}` : ""}`);
+    await page.click('[data-testid="clash-table"] tbody tr');
+    await wait(() => { const v = window.__viewer; let a = false, g = false; v.world.scene.three.traverse((o) => { if (o.name === "visor-ghost") g = true; if (!o.isMesh || !Array.isArray(o.material)) return; for (const gr of o.geometry.groups) { const m = o.material[gr.materialIndex]; if (m && gr.count > 0 && m.userData?.customId === "an:clash-a") a = true; } }); return a && g; });
+    const vis = await page.evaluate(() => window.__viewer.visibilityCounts());
+    check("Interferencias: al elegir una se ven A (rojo) y B (azul) con el resto en transparencia", vis.visible === 2, JSON.stringify(vis));
+    await page.screenshot({ path: join(outDir, "10-interferencia.png"), timeout: 240_000 });
+    const xl1 = await saveDownload('[data-act="xlsx"]', "interferencias.xlsx");
+    if (xl1) check("Interferencias: informe Excel (.xlsx)", xlsxOk(xl1.buf), `${xl1.suggested} · ${xl1.buf.length} bytes`);
+
+    // Validación IDS
+    await page.click('[data-dock-tab="ids"]');
+    await wait(() => window.__dock.tabs[1].active);
+    const idsPath = join(root, "test-models", "requisitos-estructura.ids");
+    await page.setInputFiles('.ids-tab [data-role="file"]', idsPath);
+    await page.waitForSelector(".ids-tab .spec-count", { timeout: 120_000 });
+    const idsRes = await page.evaluate(() => window.__dock.tabs[1].results.map((r) => ({ name: r.name, pass: r.pass, fail: r.fail })));
+    const truthIds = [
+      await webIfcPropCount(WebIFC.IFCBEAM, "Identidad", "Marca"),
+      await webIfcPropCount(WebIFC.IFCSLAB, "Dimensiones", "Espesor"),
+      await webIfcPropCount(WebIFC.IFCCOLUMN, "Materiales y acabados", "Material"),
+    ];
+    check("Validación IDS: cumplen / no cumplen igual que el IFC (web-ifc)", idsRes.length === 3 && idsRes.every((r, i) => r.pass === truthIds[i].pass && r.fail === truthIds[i].fail), idsRes.map((r, i) => `${r.name}: ${r.pass}/${r.fail} (IFC ${truthIds[i].pass}/${truthIds[i].fail})`).join(" · "));
+    const xl2 = await saveDownload('[data-act="xlsx"]', "ids.xlsx");
+    if (xl2) check("Validación IDS: informe Excel con resumen y detalle", xlsxOk(xl2.buf) && xl2.buf.includes(Buffer.from("xl/worksheets/sheet2.xml")), `${xl2.buf.length} bytes`);
+
+    // Comparar versiones (segunda versión generada con web-ifc a partir del IFC real)
+    const v2 = join(outDir, "version-2.ifc");
+    const truthCmp = await makeVariant(ifcPath, v2);
+    await page.click('[data-dock-tab="compare"]');
+    await wait(() => window.__dock.tabs[2].active);
+    const tcmp = Date.now();
+    await page.setInputFiles('.compare-tab [data-role="file"]', v2);
+    await page.waitForSelector('[data-testid="cmp-table"]', { timeout: 300_000 });
+    const cmp = await page.evaluate(() => { const r = window.__dock.tabs[2].result; return { added: r.added.map((x) => x.guid), removed: r.removed.map((x) => x.guid), modified: r.modified.map((m) => ({ guid: m.after.guid, geometry: m.geometry, changes: m.changes.map((c) => `${c.what}: ${c.before} → ${c.after}`) })), unchanged: r.unchanged }; });
+    const modGuids = cmp.modified.map((m) => m.guid).sort();
+    const expectMod = [...new Set([...truthCmp.changedGuids, truthCmp.movedGuid])].sort();
+    const moved = cmp.modified.find((m) => m.guid === truthCmp.movedGuid);
+    const marked = cmp.modified.find((m) => m.guid === truthCmp.beamGuid);
+    check(
+      "Comparar: nuevos, eliminados y modificados exactamente los cambiados",
+      cmp.added.length === 1 && cmp.added[0] === truthCmp.newWallGuid && cmp.removed.length === 1 && cmp.removed[0] === truthCmp.oldWallGuid && JSON.stringify(modGuids) === JSON.stringify(expectMod),
+      `+${cmp.added.length} −${cmp.removed.length} ~${cmp.modified.length} · ${cmp.unchanged} sin cambios · ${((Date.now() - tcmp) / 1000).toFixed(1)} s`,
+    );
+    check("Comparar: detalla el cambio de propiedad y el desplazamiento de 500 mm", !!marked?.changes.some((c) => c.includes(truthCmp.oldMark) && c.includes(truthCmp.newMark)) && !!moved?.geometry && moved.changes.some((c) => c.includes("+0.500 m")), `${marked?.changes[0]} | ${moved?.changes[0]}`);
+    await page.click('[data-filter="added"]');
+    await page.waitForTimeout(800);
+    await page.screenshot({ path: join(outDir, "11-comparar.png"), timeout: 240_000 });
+    const xl3 = await saveDownload('[data-act="xlsx"]', "comparacion.xlsx");
+    if (xl3) check("Comparar: informe Excel", xlsxOk(xl3.buf), `${xl3.buf.length} bytes`);
+    await page.click('[data-act="close-cmp"]');
+    await wait(() => window.__viewer.fragmentsManager.list.size === 1, null, 60_000);
+    check("Comparar: «Quitar comparación» libera la otra versión", true);
+
+    // 4D
+    await page.click('[data-dock-tab="fourd"]');
+    await wait(() => window.__dock.tabs[3].active);
+    await page.click('.fourd-tab [data-act="gen"]');
+    await page.waitForSelector('[data-testid="fourd-table"]', { timeout: 60_000 });
+    const s4 = await page.evaluate(async () => {
+      const t = window.__dock.tabs[3];
+      const [a, b] = t.range;
+      const DAY = 86400000;
+      const mid = a + Math.floor((b - a) / DAY / 2) * DAY;
+      await t.setDate(mid);
+      const expectHidden = t.acts.filter((x) => mid < x.start).reduce((n, x) => n + x.ids.length, 0);
+      const expectRunning = t.acts.filter((x) => mid >= x.start && mid <= x.end).reduce((n, x) => n + x.ids.length, 0);
+      const vis = await window.__viewer.visibilityCounts();
+      const state = { ...t.state };
+      const linked = new Set(t.acts.flatMap((x) => x.ids)).size;
+      await t.setDate(b);
+      const end = await window.__viewer.visibilityCounts();
+      return { acts: t.acts.length, expectHidden, expectRunning, state, vis, linked, total: (await t.ctx.index()).elements.size, end, csv: t.csv() };
+    });
+    check("4D: programación por niveles; en una fecha se ocultan las actividades no empezadas", s4.acts > 1 && s4.linked === s4.total && s4.vis.hidden === s4.expectHidden && s4.state.running === s4.expectRunning && s4.end.hidden === 0, `${s4.acts} actividades · a mitad de obra ${s4.vis.hidden} ocultos (esperado ${s4.expectHidden}), ${s4.state.running} en ejecución (esperado ${s4.expectRunning}) · enlazados ${s4.linked}/${s4.total} · al final ${s4.end.hidden} ocultos`);
+    await page.screenshot({ path: join(outDir, "12-4d.png"), timeout: 240_000 });
+    const imp = await page.evaluate((csv) => window.__dock.tabs[3].importCsv(csv, "prueba.csv"), s4.csv);
+    check("4D: el CSV exportado se vuelve a importar igual (editable en Excel)", imp.activities === s4.acts && imp.linked === s4.total, JSON.stringify(imp));
+    await page.click('[data-act="close"]');
+    await wait(() => document.body.dataset.dock === "closed");
+    const visClosed = await page.evaluate(() => window.__viewer.visibilityCounts());
+    check("Al cerrar el panel Análisis el modelo vuelve a verse completo", visClosed.hidden === 0, JSON.stringify(visClosed));
+
+    // Planta 2D
+    await page.click("#btn-plan");
+    await wait(() => /cortados/.test(document.querySelector(".plan-status")?.textContent ?? ""), null, 120_000);
+    const planInfo = await page.evaluate(() => { const p = window.__plan; const c = { cut: 0, above: 0, below: 0 }; for (const e of p.plan.elements) c[e.layer]++; return { storey: p.storey.name, ...c, cols: p.plan.elements.filter((e) => e.layer === "cut" && e.ifcClass === "IfcColumn").length, b: p.plan.bounds }; });
+    check("Planta 2D: corte del nivel con la geometría real", planInfo.cut > 0 && planInfo.cols > 0, `${planInfo.storey}: ${planInfo.cut} cortados (${planInfo.cols} pilares), ${planInfo.above} por encima, ${planInfo.below} por debajo`);
+    await page.evaluate((b) => { window.__plan.addDimPoint(b.minX, b.maxY); window.__plan.addDimPoint(b.maxX, b.maxY); }, planInfo.b);
+    const dims = await page.evaluate(() => window.__plan.dimensions);
+    check("Planta 2D: cota entre dos puntos", Math.abs(dims[0] - (planInfo.b.maxX - planInfo.b.minX)) < 1e-6, `${dims[0].toFixed(2)} m`);
+    await page.screenshot({ path: join(outDir, "13-planta.png"), timeout: 240_000 });
+    const pdf = await saveDownload('.plan-view [data-act="pdf"]', "planta.pdf");
+    const pdfText = pdf?.buf.toString("latin1");
+    if (pdf) check("Planta 2D: PDF A3 vectorial", pdfText.startsWith("%PDF-1.4") && pdfText.trimEnd().endsWith("%%EOF") && /MediaBox \[0 0 1190\.55\d* 841\.89\d*\]/.test(pdfText) && pdf.buf.length > 5000, `${pdf.suggested} · ${(pdf.buf.length / 1024).toFixed(0)} KB`);
+    const dxf = await saveDownload('.plan-view [data-act="dxf"]', "planta.dxf");
+    const dxfText = dxf?.buf.toString("latin1") ?? "";
+    const nLines = (dxfText.match(/\r\nLINE\r\n/g) ?? []).length;
+    if (dxf) check("Planta 2D: DXF con capas por clase IFC", dxfText.includes("AC1009") && dxfText.includes("CORTE-IfcColumn") && nLines > 100 && dxfText.trimEnd().endsWith("EOF"), `${nLines} líneas · ${(dxf.buf.length / 1024).toFixed(0)} KB`);
+    await page.keyboard.press("Escape");
+    await wait(() => document.body.dataset.plan === "closed", null, 10_000);
+    check("Planta 2D: Esc cierra la vista", true);
   }
 
   // 7. Cerrar modelo y liberar memoria

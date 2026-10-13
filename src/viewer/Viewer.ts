@@ -10,6 +10,7 @@ import { Navigator, type NavMode, type NavState } from "./Navigator";
 import { Appearance } from "../render/Appearance";
 import { Environment, type EnvSettings } from "../render/Environment";
 import { VRMode } from "./VR";
+import { Ghost } from "../render/Ghost";
 
 export type LoadProgress = {
   /** 0..1 */
@@ -21,11 +22,39 @@ export type ViewerEvents = {
   onSelectionChange?: (info: ElementInfo | null, count: number) => void;
   onVisibilityChange?: (state: VisibilityState) => void;
   onNavChange?: (state: NavState) => void;
+  /** Antes de cerrar el modelo (las herramientas de análisis liberan sus datos). */
+  onModelClosing?: () => void;
 };
 
 export type VisibilityState = "all" | "partial" | "isolated";
 
 const SELECT_STYLE = "select";
+
+/** Datos de un elemento para el panel de información (y la comparación de versiones). */
+export const ELEMENT_DATA_CONFIG: Partial<FRAGS.ItemsDataConfig> = {
+  attributesDefault: true,
+  // Verificado con un IFC real de Revit: el importador de Fragments "aplana"
+  // IsDefinedBy, que contiene directamente los IfcPropertySet/IfcElementQuantity
+  // y también el objeto de tipo (p. ej. IFCBEAMTYPE) con sus HasPropertySets.
+  // La configuración de relaciones se aplica por nombre a cualquier profundidad.
+  relations: {
+    IsDefinedBy: { attributes: true, relations: true },
+    IsTypedBy: { attributes: true, relations: true }, // otros importadores / IFC4
+    HasPropertySets: { attributes: true, relations: true }, // Psets del tipo
+    HasProperties: { attributes: true, relations: false },
+    Quantities: { attributes: true, relations: false },
+    HasAssociations: { attributes: true, relations: false }, // materiales
+    ContainedInStructure: { attributes: true, relations: false }, // nivel / planta
+    Decomposes: { attributes: true, relations: false }, // conjunto al que pertenece
+    // Relaciones inversas que llevarían a TODAS las instancias del tipo/pset
+    ObjectTypeOf: { attributes: false, relations: false },
+    DefinesOcurrence: { attributes: false, relations: false },
+    DefinesOccurrence: { attributes: false, relations: false },
+    Types: { attributes: false, relations: false },
+    RepresentationMaps: { attributes: false, relations: false },
+  },
+  relationsDefault: { attributes: false, relations: false },
+};
 
 /** Etiquetas legibles para las fases que informa el importador IFC. */
 const STAGE_LABEL: Record<FRAGS.ProgressData["process"], string> = {
@@ -51,6 +80,8 @@ export class Viewer {
   appearance!: Appearance;
   env!: Environment;
   vr!: VRMode;
+  private ghost!: Ghost;
+  private focusActive = false;
   private units: ProjectUnits = {};
   private currentModelId: string | null = null;
   private loading = false;
@@ -145,6 +176,8 @@ export class Viewer {
     // --- Navegación tipo Revizto (WASD/QE, mirar con el ratón, rueda hacia el cursor) ---
     this.nav = new Navigator(this.world, this.components, (s) => this.events.onNavChange?.(s));
     this.nav.attach();
+
+    this.ghost = new Ghost(this.world.scene.three);
 
     // --- Realidad virtual (WebXR) ---
     this.vr = new VRMode(this.world, this.components, this.fragments, this.nav, this.env);
@@ -243,6 +276,63 @@ export class Viewer {
     }
   }
 
+  /**
+   * Carga OTRA versión del IFC como modelo auxiliar (comparación). Se procesa igual (local) y
+   * empieza oculto; quien lo carga decide qué mostrar y debe liberarlo con disposeAux().
+   */
+  async loadAuxIfc(file: File, onProgress: (p: LoadProgress) => void) {
+    if (this.loading) throw new UserError("Ya se está cargando un modelo. Espera a que termine.");
+    this.loading = true;
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      validateIfcBytes(file.name, bytes);
+      const id = `aux-${file.name.replace(/\.ifc$/i, "")}-${Date.now()}`;
+      const model = await this.ifcLoader.load(bytes, true, id, {
+        processData: { progressCallback: (value, data) => onProgress({ value: Math.min(0.95, value * 0.95), stage: STAGE_LABEL[data.process] ?? "Procesando" }) },
+      });
+      model.object.visible = false;
+      await this.fragments.core.update(true);
+      return model;
+    } catch (err) {
+      throw toUserError(err);
+    } finally {
+      this.loading = false;
+    }
+  }
+
+  async disposeAux(model: FRAGS.FragmentsModel) {
+    this.auxVisible.delete(model);
+    for (const [name, map] of Object.entries(this.highlighter.selection)) {
+      if (map[model.modelId]) await this.highlighter.clear(name);
+    }
+    await this.fragments.core.disposeModel(model.modelId);
+    this.ifcLoader.cleanUp();
+    await this.fragments.core.update(true);
+  }
+
+  /** Colorea elementos de un modelo auxiliar (estilo propio, prioridad de análisis). */
+  async paintAux(model: FRAGS.FragmentsModel, name: string, color: string, ids: number[]) {
+    const id = `an:${name}`;
+    if (!this.highlighter.styles.has(id)) this.highlighter.styles.set(id, { color: new THREE.Color(color), opacity: 1, transparent: false, renderedFaces: 0, priority: 10 } as never);
+    this.paintStyles.add(id);
+    await this.highlighter.highlightByID(id, { [model.modelId]: new Set(ids) }, true, false);
+  }
+
+  /** Visibilidad deseada de los modelos auxiliares (se reaplica tras «mostrar todo»). */
+  private auxVisible = new Map<FRAGS.FragmentsModel, number[]>();
+  private async reapplyAux() {
+    for (const [m, ids] of this.auxVisible) await this.showOnlyAux(m, ids);
+  }
+
+  /** Muestra solo estos elementos de un modelo auxiliar. */
+  async showOnlyAux(model: FRAGS.FragmentsModel, ids: number[]) {
+    this.auxVisible.set(model, ids);
+    await model.setVisible(undefined, false);
+    if (ids.length) await model.setVisible(ids, true);
+    model.object.visible = ids.length > 0;
+    await this.fragments.core.update(true);
+  }
+
   /** Modelo actual en formato Fragments (para pasarlo a la vista VR del navegador). */
   async modelBuffer(): Promise<ArrayBuffer | null> {
     const model = this.currentModelId ? this.fragments.list.get(this.currentModelId) : null;
@@ -270,6 +360,11 @@ export class Viewer {
     const id = this.currentModelId;
     if (!id) return;
     await this.highlighter.clear(SELECT_STYLE);
+    for (const s of this.paintStyles) this.highlighter.styles.delete(s);
+    this.paintStyles.clear();
+    this.ghost.dispose();
+    this.focusActive = false;
+    this.events.onModelClosing?.();
     this.currentModelId = null;
     this.appearance.reset();
     this.nav.enabled = false;
@@ -314,6 +409,7 @@ export class Viewer {
   async showAll() {
     if (!this.currentModelId) return;
     await this.hider.set(true);
+    await this.reapplyAux();
     await this.fragments.core.update(true);
     this.setVisibility("all");
   }
@@ -374,8 +470,95 @@ export class Viewer {
     await this.nav.fit(() => this.world.camera.fitToItems(map));
   }
 
+  /** Encuadra una caja (m): elementos de un modelo auxiliar, interferencias… */
+  async fitBox(min: number[], max: number[], margin = 0.5) {
+    const box = new THREE.Box3(new THREE.Vector3(min[0], min[1], min[2]), new THREE.Vector3(max[0], max[1], max[2]));
+    const size = box.getSize(new THREE.Vector3()).length();
+    box.expandByScalar(Math.max(margin, size * 0.6));
+    await this.nav.fit(async () => {
+      await this.world.camera.controls.fitToBox(box, true);
+    });
+  }
+
   get modelId() {
     return this.currentModelId;
+  }
+
+  /** Modelo de Fragments abierto (para las herramientas de análisis). */
+  get model(): FRAGS.FragmentsModel | null {
+    return this.currentModelId ? (this.fragments.list.get(this.currentModelId) ?? null) : null;
+  }
+
+  private paintStyles = new Set<string>();
+
+  /**
+   * Colorea grupos de elementos (análisis: interferencias, IDS, comparación, 4D). Sustituye a la
+   * coloración anterior. Van por encima de las apariencias realistas y por debajo de la selección.
+   */
+  async paint(groups: { name: string; color: string; opacity?: number; ids: number[] }[]) {
+    if (!this.currentModelId) return;
+    // Mismo cuidado que Appearance.applyAll: crear estilos con selección activa deja restos naranjas.
+    if (!OBC.ModelIdMapUtils.isEmpty(this.highlighter.selection[SELECT_STYLE] ?? {})) await this.highlighter.clear(SELECT_STYLE);
+    const wanted = new Set(groups.filter((g) => g.ids.length).map((g) => `an:${g.name}`));
+    for (const id of [...this.paintStyles]) {
+      if (!wanted.has(id)) {
+        this.highlighter.styles.delete(id);
+        this.paintStyles.delete(id);
+      }
+    }
+    for (const g of groups) {
+      if (!g.ids.length) continue;
+      const id = `an:${g.name}`;
+      const opacity = g.opacity ?? 1;
+      const color = new THREE.Color(g.color);
+      const prev = this.highlighter.styles.get(id) as { color: THREE.Color; opacity: number } | undefined;
+      if (!prev || !prev.color.equals(color) || prev.opacity !== opacity) {
+        if (prev) this.highlighter.styles.delete(id);
+        this.highlighter.styles.set(id, { color, opacity, transparent: opacity < 1, renderedFaces: 0, priority: 10 } as never);
+      }
+      this.paintStyles.add(id);
+      await this.highlighter.highlightByID(id, { [this.currentModelId]: new Set(g.ids) }, true, false);
+    }
+    if (!wanted.size) await this.highlighter.updateColors();
+    await this.fragments.core.update(true);
+  }
+
+  async clearPaint() {
+    if (!this.paintStyles.size) return;
+    await this.paint([]);
+  }
+
+  /**
+   * Muestra solo estos elementos y el resto del modelo como fantasma translúcido (contexto).
+   * null: vuelve a mostrar todo.
+   */
+  async focusElements(ids: number[] | null) {
+    const model = this.model;
+    if (!model) return;
+    if (!ids) {
+      this.ghost.hide();
+      if (this.focusActive) {
+        this.focusActive = false;
+        await this.showAll();
+      }
+      return;
+    }
+    this.focusActive = true;
+    await this.hider.isolate({ [model.modelId]: new Set(ids) });
+    await this.reapplyAux();
+    await this.ghost.show(model);
+    await this.fragments.core.update(true);
+    this.setVisibility("isolated");
+  }
+
+  /** Oculta exactamente estos elementos y muestra el resto (4D). */
+  async setHiddenExactly(ids: number[]) {
+    if (!this.currentModelId) return;
+    await this.hider.set(true);
+    await this.reapplyAux();
+    if (ids.length) await this.hider.set(false, { [this.currentModelId]: new Set(ids) });
+    await this.fragments.core.update(true);
+    this.setVisibility(ids.length ? "partial" : "all");
   }
 
   /** Elementos seleccionados (localIds del modelo actual). */
@@ -464,30 +647,7 @@ export class Viewer {
   async getElementInfo(modelId: string, localId: number): Promise<ElementInfo | null> {
     const model = this.fragments.list.get(modelId);
     if (!model) return null;
-    const [data] = await model.getItemsData([localId], {
-      attributesDefault: true,
-      // Verificado con un IFC real de Revit: el importador de Fragments "aplana"
-      // IsDefinedBy, que contiene directamente los IfcPropertySet/IfcElementQuantity
-      // y también el objeto de tipo (p. ej. IFCBEAMTYPE) con sus HasPropertySets.
-      // La configuración de relaciones se aplica por nombre a cualquier profundidad.
-      relations: {
-        IsDefinedBy: { attributes: true, relations: true },
-        IsTypedBy: { attributes: true, relations: true }, // otros importadores / IFC4
-        HasPropertySets: { attributes: true, relations: true }, // Psets del tipo
-        HasProperties: { attributes: true, relations: false },
-        Quantities: { attributes: true, relations: false },
-        HasAssociations: { attributes: true, relations: false }, // materiales
-        ContainedInStructure: { attributes: true, relations: false }, // nivel / planta
-        Decomposes: { attributes: true, relations: false }, // conjunto al que pertenece
-        // Relaciones inversas que llevarían a TODAS las instancias del tipo/pset
-        ObjectTypeOf: { attributes: false, relations: false },
-        DefinesOcurrence: { attributes: false, relations: false },
-        DefinesOccurrence: { attributes: false, relations: false },
-        Types: { attributes: false, relations: false },
-        RepresentationMaps: { attributes: false, relations: false },
-      },
-      relationsDefault: { attributes: false, relations: false },
-    });
+    const [data] = await model.getItemsData([localId], ELEMENT_DATA_CONFIG);
     const [guid] = await model.getGuidsByLocalIds([localId]);
     return parseItemData(data ?? {}, { localId, guid: guid ?? null }, this.units);
   }

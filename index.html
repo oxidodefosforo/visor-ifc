@@ -29,6 +29,9 @@
         <button data-view="technical" class="active" title="Colores del IFC, para coordinación">Técnica</button>
         <button data-view="realistic" title="Materiales con textura, cielo, sol y sombras">Realista</button>
       </div>
+      <div class="sep"></div>
+      <button id="btn-analysis" disabled title="Interferencias, validación IDS, comparar versiones y 4D">Análisis</button>
+      <button id="btn-plan" disabled title="Planta 2D del nivel: corte, cotas, PDF y DXF">Planta 2D</button>
       <button id="btn-vr" class="vr-btn" disabled title="Ver el modelo con gafas de realidad virtual (Meta Quest con Link / Air Link)">VR</button>
       <div class="model-name" id="model-name"></div>
       <div class="update-status" id="update-status" hidden></div>
@@ -47,6 +50,7 @@
           <div class="progress-bar"><div id="progress-fill"></div></div>
         </div>
         <div id="visibility-badge" class="badge" hidden></div>
+        <section id="analysis" class="dock" hidden aria-label="Análisis"></section>
         <div class="nav-hud" id="nav-hud" hidden>
           <div class="seg" role="group" aria-label="Modo de navegación">
             <button data-mode="fly" class="active" title="Recorrido: WASD + ratón para mirar (como Revizto)">Recorrido</button>

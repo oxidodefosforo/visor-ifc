@@ -42,6 +42,9 @@ En una máquina nueva, la prueba necesita una vez `npx playwright install chromi
 | electron | 44.7.0 | app de escritorio (Chromium 14x) |
 | electron-builder | 26.15.3 | instalador NSIS |
 | electron-updater | 6.8.9 | única dependencia de producción (`dependencies`); el resto es devDependencies porque Vite lo empaqueta en dist/ |
+| three-mesh-bvh | 0.9.9 | interferencias (ya era dependencia de components; ahora fijada) |
+| fflate | 0.8.3 | zip para .xlsx y deflate del PDF |
+| iwer | 2.5.0 | solo pruebas: gafas WebXR emuladas (Meta, Quest 3). 2.6.0 salió el 2026-10-13: no se usa aún |
 
 Versiones consultadas en el registro npm el 2026-10-12. La API se verificó contra los `.d.ts`
 instalados y los tutoriales oficiales (docs.thatopen.com: IfcLoader, Highlighter, Hider).
@@ -60,6 +63,22 @@ src/render/Appearance.ts  Apariencias: intercepta MaterialManager.new (Lambert�
 src/render/materials.ts   Presets PBR, reglas de asignación automática, material triplanar (onBeforeCompile)
 src/render/textures.ts    Texturas procedurales (canvas 2D, sin descargas) e imágenes propias
 src/render/Environment.ts Vista realista: cielo físico (Sky), PMREM, sol con sombras, ACES, suelo, hora/orientación
+src/viewer/VR.ts        Sesión WebXR immersive-vr: bucle de three, rig de cámara, locomoción con mandos, teletransporte
+src/render/Ghost.ts     Copia translúcida del modelo para dar contexto (interferencias, IDS, comparar)
+src/ui/swatch.ts        Muestras de material, rejilla de acabados y ventana flotante (Popover) sin controles nativos
+src/ui/contextMenu.ts   Menú del botón derecho: acabado por instancia / tipo / material IFC + Encuadrar/Ocultar/Aislar
+src/ui/vrUi.ts          Botón VR, página de sesión ?vr=<token> (modelo recibido de la app), instrucciones Quest Link
+src/analysis/modelIndex.ts  Índice por modelo (clase, nombre, GUID, nivel, caja) y triángulos por elemento (getItemsGeometry)
+src/analysis/clash.ts   Interferencias: barrido de cajas + BVH (cruce) + paridad de rayos (contenido)
+src/analysis/compare.ts Firmas por GlobalId (caja, atributos, Psets) y diferencias con desplazamiento global
+src/analysis/plan.ts    Corte horizontal de triángulos, cadenas de contorno; capas corte / por encima / por debajo
+src/analysis/drawingExport.ts  PDF vectorial propio (A3, Helvetica WinAnsi, deflate) y DXF R12
+src/analysis/xlsx.ts    Escritor .xlsx mínimo (fflate) y descarga
+src/ui/analysis/*       Panel inferior «Análisis»: dock.ts + clashTab, idsTab, compareTab, fourdTab
+src/ui/planView.ts      Vista «Planta 2D» (SVG, cotas con imán, exportación PDF/DXF)
+electron/vrServer.cjs   Servidor 127.0.0.1 (puerto 47821 o libre) que sirve dist/ y la sesión VR; abre Chrome/Edge
+tests/variant.mjs       Genera con web-ifc una 2.ª versión del IFC con cambios conocidos (para «Comparar»)
+test-models/requisitos-estructura.ids  IDS de ejemplo (resultados contrastados con web-ifc en la e2e)
 src/style.css           Estilos (tema oscuro)
 scripts/copy-wasm.mjs   Copia node_modules/web-ifc/*.wasm → public/wasm/ (predev/prebuild)
 tests/e2e.mjs           Prueba e2e Playwright + contraste con web-ifc en Node
@@ -202,6 +221,50 @@ es lentísimo (capturas de >30 s): no usarlo.
   Para quitarlo hace falta un certificado de firma (Azure Trusted Signing u OV/EV).
 - Log de la app: `%APPDATA%\Visor IFC\logs\main.log` (Ayuda → Abrir carpeta de registros).
 
+## v0.5 — menú contextual, VR y análisis (decisiones)
+
+- **Causa real de «la ventana desaparece» al elegir material:** `body` lleva `data-tab`, `data-view` y
+  `data-dock-tab` y los manejadores hacían `closest("[data-tab]")`: un clic en CUALQUIER parte del panel subía
+  hasta `body` y llamaba a `showTab()` → `renderMaterials()` destruía el `<select>` abierto. Ahora los selectores
+  son `button[data-…]`. Además los desplegables de acabado se sustituyeron por una rejilla propia (Popover).
+  Regla: no usar en `closest()` atributos que también estén en `body.dataset` (mismo fallo con `data-scope` en el
+  propio menú).
+- **Menú contextual:** clic derecho sin arrastre (<5 px, <800 ms; `pointerup` en `window` porque camera-controls
+  captura el puntero en Órbita). Selección con `Raycasters.castRay` → `localId`. Ámbitos: instancia (o selección
+  múltiple), tipo (`IsDefinedBy` aplanado contiene el `IFC…TYPE`), material IFC. Estilos del Highlighter:
+  `mat:g` (1) < `mat:t` (2) < `mat:o` (3). Perfil: `byType` con clave `CLASE|Nombre del tipo` (exportable).
+- **VR:** Electron 44 **no tiene WebXR** (`navigator.xr` no existe ni con `--enable-features=WebXR`; comprobado).
+  La app publica el modelo **ya convertido** (`model.getBuffer(false)`, Fragments comprimido) + perfil + entorno
+  + cámara + ocultos en `electron/vrServer.cjs` (solo 127.0.0.1, token aleatorio) y abre Chrome/Edge en
+  `http://localhost:47821/index.html?vr=<token>` (localhost = contexto seguro). En navegador con gafas, el botón
+  entra directo. Durante la sesión se para el bucle de That Open (`components.enabled = false`) y three lleva
+  el ritmo (`renderer.setAnimationLoop`); la cámara va en un `rig` (Group). `local-floor`: ojos a 1,6 m.
+  Velocidad = clamp(base×0,35; 1,5; 6) m/s. Teletransporte: `model.raycast` con una cámara auxiliar en la pose
+  del mando y el «ratón» en el centro del lienzo. Giro del rig desde el cuaternión (rotation.y salta >90°).
+  El MIME `.mjs` es obligatorio: sin él el worker de Fragments no arranca y la carga se queda colgada sin error.
+- **Ghosting:** en Fragments 3.4.8 un estilo/`setOpacity` se dibuja ENCIMA de la base (con opacidad 0,12 en todos
+  los elementos seguían dibujándose los tramos opacos): no sirve para transparencia. Se aísla lo que interesa
+  (Hider) y se dibuja `Ghost` (malla única translúcida, `depthWrite: false`, sin raycast).
+- **Colores de análisis:** estilos `an:*` con prioridad 10 (encima de apariencias, debajo de selección);
+  `Viewer.paint()` quita la selección antes (mismo bug de restos naranjas que applyAll).
+- **Interferencias:** fase amplia por cajas (`getBoxes`) con solape > tolerancia en X/Y/Z (descarta caras que
+  solo se tocan), fase fina `MeshBVH.intersectsGeometry` y, si no se cortan, paridad de rayos (contenido).
+  Profundidad = menor solape de cajas (aproximada). En el modelo de prueba: 867 choques en ~2 s (vigas/losas y
+  pilares/vigas que Revit no recorta). Encuadre a la zona de solape (una losa entera alejaba la vista).
+- **Niveles:** `getSpatialStructure()` alterna nodos de categoría (`category`, localId null) y de elemento
+  (`localId`, category null): un elemento es nivel si su nodo padre es la categoría IFCBUILDINGSTOREY.
+- **Comparar:** segunda versión con `IfcLoader.load` como modelo auxiliar (oculto; solo se muestran sus
+  elementos nuevos/eliminados). Firma = caja (`getBoxes`), atributos, tipo, material y Psets. **Desplazamiento
+  global** = moda (al mm) de las diferencias de caja: `getBoxes` del modelo auxiliar llegaba a veces desplazado
+  en bloque (coordinación de Fragments según `getCoordinates()` del archivo, que cambia al re-guardar con web-ifc).
+  La colocación del modelo auxiliar se calcula con centroides de `getItemsGeometry` (espacio de datos real).
+- **4D:** fases por clase y nivel; ocultar con `Hider` (`setHiddenExactly`), en ejecución con estilo `an:4d-active`.
+  CSV `;` con BOM (Excel en español), fechas dd/mm/aaaa o ISO.
+- **Planta 2D:** corte propio de triángulos (no `getSection`, sin documentar el formato del buffer). Franja del
+  nivel [elev−0,3; siguiente−0,01]; cortados (grueso + relleno por cadenas cerradas), por encima a media altura del
+  elemento (discontinuo), por debajo (fino). Escala A3 normalizada (1:20…1:5000). Planta: X = x, Y = −z del visor.
+- **Excel:** .xlsx real (OOXML mínimo con fflate), validado con openpyxl. En Electron la descarga abre «Guardar como».
+
 ## Publicar una versión nueva
 
 1. Cambios en el código + `npm run test:e2e`.
@@ -245,7 +308,21 @@ capturas reales (3/3 tras la corrección; antes ~50 %). Asignación automática,
 edición en vivo, material por elemento (vidrio) sin restos de selección, perfil exportar/importar,
 hora del día, vuelta a Técnica.
 
-**No probado:** instalador y app en Windows real; sensación de la navegación con GPU real (aquí ~3 fps);
+v0.5 (menú contextual, VR, análisis): e2e 93/93 en build (Chromium) y 85/85 en Electron (sin descargas ni
+portapapeles, que en Electron abren diálogos del sistema). Comprobado: clic derecho → material por tipo (96
+instancias) e instancia con prioridad; arrastrar con el derecho no abre el menú. VR con gafas emuladas (IWER,
+Quest 3): andar, giro 30°, teletransporte sobre geometría real, salida y vuelta a la navegación; desde Electron
+real el botón VR publica el modelo en el servidor local y un Chromium aparte lo carga con sus materiales y entra
+en VR. Interferencias: 673 en ~3 s, muestra de 25 confirmada con la geometría de web-ifc en Node. IDS: 357/18,
+82/217 y 203/0, idénticos a web-ifc. Comparar con una 2.ª versión generada (tests/variant.mjs): exactamente
+1 nuevo, 1 eliminado, 2 modificados (marca B1→B1-REV2 y pilar +0,500 m en X). 4D: ocultos/en ejecución a mitad de
+obra coinciden con la programación; CSV ida y vuelta. Planta 2D: PDF A3 (qpdf sin errores, revisado a la vista)
+y DXF (ezdxf sin errores: 13.5k LINE, 69 POLYLINE, capas por clase). Excel validado con openpyxl.
+
+**No probado:** VR con unas Quest reales (solo emulador IWER de Meta: sesión, mandos, teletransporte, salida;
+y el paso app→Chrome con Electron real + servidor local); rendimiento VR con GPU real; IDS con facetas de
+clasificación/partOf/material reales (solo propiedades en el modelo de prueba); 4D con un CSV de Project/Primavera
+real; DXF abierto en AutoCAD (validado con ezdxf, sin errores); instalador y app en Windows real; sensación de la navegación con GPU real (aquí ~3 fps);
 aspecto y rendimiento de la vista realista con GPU real (sombras 2048 px, PMREM);
 unidades derivadas de MEP (IfcDerivedUnit: caudal, presión…) — lógica escrita, sin IFC MEP para probar. Modelos MEP (no había IFC MEP disponible), IFC2x3, modelos >100 MB, Firefox/Safari,
 GPU real (solo render por software), Psets de tipo con valores (los tipos del modelo de prueba no
@@ -253,7 +330,11 @@ tienen Psets), relaciones IfcPropertyEnumeratedValue/List/Bounded (lógica escri
 
 ## Fase 2 (no implementado)
 
-Filtros por nivel y clase IFC, planos de sección, mediciones, varios modelos a la vez.
+Filtros por nivel y clase IFC, planos de sección y caja de sección, mediciones 3D, varios modelos federados.
+Del archivo de referencia (Visor_IFC.html «Auditoría») quedan: issues y BCF (importar/exportar), viewpoints,
+mediciones, caja/plano de sección, árbol espacial y por categoría, colorear por categoría, rayos X, cubo de vistas,
+informes PDF de tablas, glTF/OBJ de referencia. En v0.5 se hizo el bloque «Análisis» (interferencias, IDS,
+comparar, 4D, planta 2D).
 RVT: integración posterior vía Autodesk Platform Services (Model Derivative); no abrir RVT en local.
 Otros pendientes: unidades junto a los valores (hoy se muestran en unidades del proyecto sin etiqueta),
 árbol espacial, IFCZIP, conversión en Web Worker para no bloquear la UI en modelos grandes.

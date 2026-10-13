@@ -1,7 +1,7 @@
 {
   "name": "visor-ifc",
   "private": true,
-  "version": "0.4.0",
+  "version": "0.5.0",
   "type": "module",
   "scripts": {
     "predev": "node scripts/copy-wasm.mjs",
@@ -26,9 +26,11 @@
     "camera-controls": "3.1.2",
     "electron": "44.7.0",
     "electron-builder": "26.15.3",
+    "fflate": "0.8.3",
     "iwer": "2.5.0",
     "playwright": "1.56.0",
     "three": "0.186.1",
+    "three-mesh-bvh": "0.9.9",
     "typescript": "7.0.2",
     "vite": "8.3.4",
     "web-ifc": "0.0.77"
